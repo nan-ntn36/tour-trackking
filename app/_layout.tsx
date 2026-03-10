@@ -19,10 +19,6 @@ function RootLayoutNav() {
                     name="(auth)"
                     options={{ headerShown: false }}
                 />
-                <Stack.Screen
-                    name="tour"
-                    options={{ headerShown: false }}
-                />
             </Stack>
         </NavigationThemeProvider>
     );

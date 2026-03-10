@@ -119,9 +119,14 @@ export default function DestinationsScreen() {
     // Bấm vào card → chuyển sang Map tab, center vào điểm đó
     const handleGoToMap = (item: any) => {
         if (item.latitude && item.longitude) {
-            router.push({
+            router.navigate({
                 pathname: "/(tabs)/map",
-                params: { focusLat: item.latitude, focusLng: item.longitude, focusName: item.name },
+                params: {
+                    focusLat: item.latitude.toString(),
+                    focusLng: item.longitude.toString(),
+                    focusName: item.name,
+                    _ts: Date.now().toString(),
+                },
             });
         }
     };

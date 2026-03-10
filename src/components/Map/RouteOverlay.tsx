@@ -1,4 +1,3 @@
-import React from "react";
 import { Polyline } from "react-native-maps";
 import { useAppTheme } from "../../theme/ThemeProvider";
 

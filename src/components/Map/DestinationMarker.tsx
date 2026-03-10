@@ -1,4 +1,4 @@
-import React from "react";
+
 import { Marker, Callout } from "react-native-maps";
 import { View, StyleSheet } from "react-native";
 import { Text } from "react-native-paper";
@@ -47,6 +47,7 @@ const styles = StyleSheet.create({
     },
     desc: {
         marginTop: 2,
-        color: "#666",
+        color: "#2b2828ff",
+        fontWeight: "bold",
     },
 });

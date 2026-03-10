@@ -1,4 +1,5 @@
 import { supabase } from "../lib/supabase";
+import * as Crypto from "expo-crypto";
 import {
     CLOUDINARY_UPLOAD_URL, CLOUDINARY_UPLOAD_PRESET,
     CLOUDINARY_DESTROY_URL, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET,
@@ -115,24 +116,31 @@ export async function getUserPhotos(userId: string) {
 async function deleteFromCloudinary(publicId: string) {
     try {
         const timestamp = Math.round(Date.now() / 1000).toString();
-        // Cloudinary yêu cầu signature cho destroy API
-        // Simplified: dùng API key + timestamp (cho app nội bộ)
+
+        // Tạo signature SHA-1: sha1("public_id=xxx&timestamp=xxx" + api_secret)
+        const toSign = `public_id=${publicId}&timestamp=${timestamp}${CLOUDINARY_API_SECRET}`;
+        const signature = await Crypto.digestStringAsync(
+            Crypto.CryptoDigestAlgorithm.SHA1,
+            toSign
+        );
+
         const formData = new FormData();
         formData.append("public_id", publicId);
         formData.append("api_key", CLOUDINARY_API_KEY);
         formData.append("timestamp", timestamp);
+        formData.append("signature", signature);
 
-        // Tạo signature: sha1(public_id=xxx&timestamp=xxx + api_secret)
-        // React Native không có crypto, nên dùng simple hash
-        const toSign = `public_id=${publicId}&timestamp=${timestamp}${CLOUDINARY_API_SECRET}`;
-        // Simple hash fallback — gửi không sign, Cloudinary sẽ reject
-        // Để đơn giản: xóa metadata khỏi Supabase, ảnh Cloudinary free tier không tốn dung lượng
-        await fetch(CLOUDINARY_DESTROY_URL, {
+        const response = await fetch(CLOUDINARY_DESTROY_URL, {
             method: "POST",
             body: formData,
         });
+
+        const data = await response.json();
+        if (data.result !== "ok") {
+            console.warn("Cloudinary destroy response:", data);
+        }
     } catch (err) {
-        console.warn("Cloudinary delete failed (non-critical):", err);
+        console.error("Cloudinary delete failed:", err);
     }
 }
 

@@ -1,9 +1,9 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { View, StyleSheet, Alert } from "react-native";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { View, StyleSheet, Alert, ScrollView, KeyboardAvoidingView, Platform, Animated, PanResponder, ActivityIndicator, type TextInput as RNTextInput } from "react-native";
 import {
     Text, FAB, Surface, IconButton, Snackbar, Portal, Dialog, TextInput, Button,
 } from "react-native-paper";
-import MapView, { Marker, PROVIDER_DEFAULT } from "react-native-maps";
+import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from "react-native-maps";
 import { useAppTheme } from "../../src/theme/ThemeProvider";
 import { spacing } from "../../src/theme/spacing";
 import { useLocation } from "../../src/hooks/useLocation";
@@ -12,6 +12,7 @@ import { useAuth } from "../../src/hooks/useAuth";
 import { saveRoute } from "../../src/services/route.service";
 import { checkIn, getVisibleDestinations } from "../../src/services/destination.service";
 import { formatDistance, formatDuration } from "../../src/utils/distance";
+import { getDirectionsWithInfo } from "../../src/services/directions.service";
 import RouteOverlay from "../../src/components/Map/RouteOverlay";
 import DestinationMarker from "../../src/components/Map/DestinationMarker";
 import PhotoUploadButton from "../../src/components/Photo/PhotoUploadButton";
@@ -33,6 +34,7 @@ export default function MapScreen() {
     const [checkInDesc, setCheckInDesc] = useState("");
     const [checkingIn, setCheckingIn] = useState(false);
     const [lastCheckInId, setLastCheckInId] = useState<string | null>(null);
+    const descInputRef = useRef<RNTextInput>(null);
 
     // Vị trí chọn trên bản đồ (long-press)
     const [selectedLocation, setSelectedLocation] = useState<{ latitude: number; longitude: number } | null>(null);
@@ -40,8 +42,63 @@ export default function MapScreen() {
     // Destinations on map
     const [destinations, setDestinations] = useState<any[]>([]);
 
+    // Navigation route (đường đi đến điểm đến)
+    const [navRoute, setNavRoute] = useState<{ latitude: number; longitude: number }[] | null>(null);
+    const [navInfo, setNavInfo] = useState<{ distanceKm: number; durationMinutes: number; destName: string } | null>(null);
+    const [loadingRoute, setLoadingRoute] = useState(false);
+    const routeAbortRef = useRef<AbortController | null>(null);
+    const [navCardExpanded, setNavCardExpanded] = useState(true);
+
+    // Animated bottom card
+    const NAV_CARD_HEIGHT = 260;
+    const NAV_PEEK_HEIGHT = 64;
+    const navTranslateY = useRef(new Animated.Value(0)).current;
+
+    const navPanResponder = useMemo(() => PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 5,
+        onPanResponderMove: (_, g) => {
+            // Only allow dragging down when expanded, up when collapsed
+            if (navCardExpanded && g.dy > 0) {
+                navTranslateY.setValue(g.dy);
+            } else if (!navCardExpanded && g.dy < 0) {
+                navTranslateY.setValue((NAV_CARD_HEIGHT - NAV_PEEK_HEIGHT) + g.dy);
+            }
+        },
+        onPanResponderRelease: (_, g) => {
+            const threshold = 50;
+            if (navCardExpanded && g.dy > threshold) {
+                // Collapse
+                Animated.spring(navTranslateY, {
+                    toValue: NAV_CARD_HEIGHT - NAV_PEEK_HEIGHT,
+                    useNativeDriver: true, bounciness: 4,
+                }).start(() => setNavCardExpanded(false));
+            } else if (!navCardExpanded && g.dy < -threshold) {
+                // Expand
+                Animated.spring(navTranslateY, {
+                    toValue: 0,
+                    useNativeDriver: true, bounciness: 4,
+                }).start(() => setNavCardExpanded(true));
+            } else {
+                // Snap back
+                Animated.spring(navTranslateY, {
+                    toValue: navCardExpanded ? 0 : NAV_CARD_HEIGHT - NAV_PEEK_HEIGHT,
+                    useNativeDriver: true, bounciness: 4,
+                }).start();
+            }
+        },
+    }), [navCardExpanded]);
+
+    // Auto-expand khi có nav mới
+    useEffect(() => {
+        if (navInfo) {
+            navTranslateY.setValue(0);
+            setNavCardExpanded(true);
+        }
+    }, [navInfo]);
+
     // Nhận params từ Destinations tab
-    const params = useLocalSearchParams<{ focusLat?: string; focusLng?: string; focusName?: string }>();
+    const params = useLocalSearchParams<{ focusLat?: string; focusLng?: string; focusName?: string; _ts?: string }>();
 
     // Load destinations khi focus tab
     useFocusEffect(
@@ -54,24 +111,72 @@ export default function MapScreen() {
         }, [user])
     );
 
-    // Center map vào destination được chọn từ danh sách
+    // Center map + vẽ đường đi đến destination được chọn từ danh sách
     useEffect(() => {
         if (params.focusLat && params.focusLng && mapRef.current) {
-            const lat = parseFloat(params.focusLat);
-            const lng = parseFloat(params.focusLng);
-            if (!isNaN(lat) && !isNaN(lng)) {
+            const destLat = parseFloat(params.focusLat);
+            const destLng = parseFloat(params.focusLng);
+            if (isNaN(destLat) || isNaN(destLng)) return;
+
+            if (location) {
+                routeAbortRef.current?.abort();
+                const controller = new AbortController();
+                routeAbortRef.current = controller;
+
+                setLoadingRoute(true);
+                getDirectionsWithInfo(
+                    { latitude: location.latitude, longitude: location.longitude },
+                    { latitude: destLat, longitude: destLng },
+                    controller.signal
+                )
+                    .then((result) => {
+                        if (controller.signal.aborted) return;
+                        setNavRoute(result.coordinates);
+                        setNavInfo({
+                            distanceKm: result.distanceKm,
+                            durationMinutes: result.durationMinutes,
+                            destName: params.focusName || "Điểm đến",
+                        });
+                        mapRef.current?.fitToCoordinates(
+                            [
+                                { latitude: location.latitude, longitude: location.longitude },
+                                { latitude: destLat, longitude: destLng },
+                            ],
+                            { edgePadding: { top: 100, right: 60, bottom: 200, left: 60 }, animated: true }
+                        );
+                    })
+                    .catch((err) => {
+                        if (controller.signal.aborted) return;
+                        setSnackMsg(err.message || "Không thể lấy đường đi");
+                    })
+                    .finally(() => {
+                        if (!controller.signal.aborted) setLoadingRoute(false);
+                    });
+            } else {
                 mapRef.current.animateToRegion({
-                    latitude: lat,
-                    longitude: lng,
-                    latitudeDelta: 0.005,
-                    longitudeDelta: 0.005,
+                    latitude: destLat, longitude: destLng,
+                    latitudeDelta: 0.005, longitudeDelta: 0.005,
                 });
-                if (params.focusName) {
-                    setSnackMsg(`📍 ${params.focusName}`);
-                }
+            }
+
+            if (params.focusName) {
+                setSnackMsg(`📍 ${params.focusName}`);
             }
         }
-    }, [params.focusLat, params.focusLng]);
+    }, [params.focusLat, params.focusLng, params._ts]);
+
+    // Hủy loading route
+    const cancelRouteLoading = () => {
+        routeAbortRef.current?.abort();
+        routeAbortRef.current = null;
+        setLoadingRoute(false);
+    };
+
+    // Xóa đường dẫn
+    const clearNavRoute = () => {
+        setNavRoute(null);
+        setNavInfo(null);
+    };
 
     // Center map khi có vị trí lần đầu (nếu không có focus params)
     useEffect(() => {
@@ -131,6 +236,7 @@ export default function MapScreen() {
             setCheckInName("");
             setCheckInDesc("");
             setSelectedLocation(null);
+            setShowCheckIn(false);
             // Reload markers
             const updated = await getVisibleDestinations(user.id);
             setDestinations(updated);
@@ -185,6 +291,16 @@ export default function MapScreen() {
             >
                 {isTracking && points.length >= 2 && <RouteOverlay coordinates={points} />}
 
+                {/* Navigation route polyline */}
+                {navRoute && navRoute.length >= 2 && (
+                    <Polyline
+                        coordinates={navRoute}
+                        strokeColor="#2196F3"
+                        strokeWidth={5}
+                        lineDashPattern={[10, 5]}
+                    />
+                )}
+
                 {/* Destination markers */}
                 {destinations.map((dest) => (
                     dest.latitude && dest.longitude ? (
@@ -209,6 +325,68 @@ export default function MapScreen() {
                     />
                 )}
             </MapView>
+
+            {/* Navigation bottom card — swipeable */}
+            {navInfo && (
+                <Animated.View
+                    style={[
+                        styles.navCard,
+                        { backgroundColor: paperTheme.colors.surface, transform: [{ translateY: navTranslateY }] },
+                    ]}
+                    {...navPanResponder.panHandlers}
+                >
+                    {/* Drag handle */}
+                    <View style={styles.navHandle}>
+                        <View style={[styles.navHandlePill, { backgroundColor: paperTheme.colors.outlineVariant }]} />
+                    </View>
+
+                    {/* Collapsed peek — always visible */}
+                    <View style={styles.navPeekRow}>
+                        <Text variant="titleMedium" style={{ fontWeight: "bold", color: paperTheme.colors.onSurface, flex: 1 }}>
+                            {Math.ceil(navInfo.durationMinutes)} phút
+                            <Text style={{ fontWeight: "normal", color: paperTheme.colors.onSurfaceVariant }}>
+                                {" "}({navInfo.distanceKm.toFixed(1)} Km)
+                            </Text>
+                        </Text>
+                        <IconButton
+                            icon="close"
+                            iconColor={paperTheme.colors.onSurfaceVariant}
+                            size={20}
+                            onPress={clearNavRoute}
+                            style={{ margin: 0 }}
+                        />
+                    </View>
+
+                    {/* Expanded content */}
+                    <View style={styles.navExpandedContent}>
+                        {/* Destination info */}
+                        <View style={styles.navInfoRow}>
+                            <View style={[styles.navDot, { backgroundColor: paperTheme.colors.primary }]} />
+                            <Text variant="bodyMedium" style={{ color: paperTheme.colors.onSurfaceVariant, flex: 1 }} numberOfLines={1}>
+                                {navInfo.destName}
+                            </Text>
+                        </View>
+
+                        {/* Arrival time */}
+                        <View style={styles.navInfoRow}>
+                            <Text style={{ fontSize: 14, color: paperTheme.colors.onSurfaceVariant }}>⏰</Text>
+                            <Text variant="bodyMedium" style={{ color: paperTheme.colors.onSurfaceVariant }}>
+                                Đến lúc ~{new Date(Date.now() + navInfo.durationMinutes * 60000).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" })}
+                            </Text>
+                        </View>
+
+                        {/* Start button */}
+                        <Button
+                            mode="contained"
+                            onPress={clearNavRoute}
+                            style={[styles.navStartBtn, { backgroundColor: paperTheme.colors.onSurface }]}
+                            labelStyle={{ color: paperTheme.colors.surface, fontWeight: "bold", fontSize: 16 }}
+                        >
+                            Bắt đầu
+                        </Button>
+                    </View>
+                </Animated.View>
+            )}
 
             {/* Tracking info bar */}
             {isTracking && (
@@ -266,59 +444,88 @@ export default function MapScreen() {
                 />
             </View>
 
-            {/* FAB Start/Stop */}
-            <FAB
-                icon={isTracking ? "stop" : "play"}
-                label={isTracking ? "Dừng" : "Bắt đầu"}
-                onPress={isTracking ? handleStop : handleStart}
-                loading={saving}
-                style={[styles.fab, { backgroundColor: isTracking ? paperTheme.colors.error : paperTheme.colors.primary }]}
-                color="white"
-            />
+            {/* FAB Start/Stop — ẩn khi nav card expanded */}
+            {(!navInfo || !navCardExpanded) && (
+                <FAB
+                    icon={isTracking ? "stop" : "play"}
+                    label={isTracking ? "Dừng" : "Bắt đầu"}
+                    onPress={isTracking ? handleStop : handleStart}
+                    loading={saving}
+                    style={[styles.fab, { backgroundColor: isTracking ? paperTheme.colors.error : paperTheme.colors.primary }]}
+                    color="white"
+                />
+            )}
 
             {/* Check-in Dialog */}
             <Portal>
                 <Dialog visible={showCheckIn} onDismiss={() => setShowCheckIn(false)}>
                     <Dialog.Title>📍 Check-in</Dialog.Title>
-                    <Dialog.Content>
-                        <TextInput
-                            label="Tên địa điểm"
-                            value={checkInName}
-                            onChangeText={setCheckInName}
-                            mode="outlined"
-                            style={{ marginBottom: spacing.sm }}
-                        />
-                        <TextInput
-                            label="Mô tả (tùy chọn)"
-                            value={checkInDesc}
-                            onChangeText={setCheckInDesc}
-                            mode="outlined"
-                            multiline
-                            numberOfLines={2}
-                        />
-                        {checkInLocation && (
-                            <Text variant="bodySmall" style={{ marginTop: spacing.sm, color: paperTheme.colors.onSurfaceVariant }}>
-                                📌 {checkInLocation.latitude.toFixed(5)}, {checkInLocation.longitude.toFixed(5)}
-                                {selectedLocation ? " (Đã chọn trên bản đồ)" : " (Vị trí hiện tại)"}
-                            </Text>
-                        )}
-                        {lastCheckInId && (
-                            <PhotoUploadButton
-                                destinationId={lastCheckInId}
-                                latitude={checkInLocation?.latitude}
-                                longitude={checkInLocation?.longitude}
-                                onUploaded={() => setSnackMsg("📷 Đã upload ảnh!")}
-                            />
-                        )}
-                    </Dialog.Content>
-                    <Dialog.Actions>
-                        <Button onPress={() => setShowCheckIn(false)}>Hủy</Button>
-                        <Button onPress={handleCheckIn} loading={checkingIn} disabled={!checkInName.trim()}>
-                            Check-in
-                        </Button>
-                    </Dialog.Actions>
+                    <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
+                        <ScrollView keyboardShouldPersistTaps="handled">
+                            <Dialog.Content>
+                                <TextInput
+                                    label="Tên địa điểm"
+                                    value={checkInName}
+                                    onChangeText={setCheckInName}
+                                    mode="outlined"
+                                    style={{ marginBottom: spacing.sm }}
+                                    returnKeyType="next"
+                                    blurOnSubmit={false}
+                                    onSubmitEditing={() => descInputRef.current?.focus()}
+                                />
+                                <TextInput
+                                    ref={descInputRef}
+                                    label="Mô tả (tùy chọn)"
+                                    value={checkInDesc}
+                                    onChangeText={setCheckInDesc}
+                                    mode="outlined"
+                                    multiline
+                                    numberOfLines={2}
+                                />
+                                {checkInLocation && (
+                                    <Text variant="bodySmall" style={{ marginTop: spacing.sm, color: paperTheme.colors.onSurfaceVariant }}>
+                                        📌 {checkInLocation.latitude.toFixed(5)}, {checkInLocation.longitude.toFixed(5)}
+                                        {selectedLocation ? " (Đã chọn trên bản đồ)" : " (Vị trí hiện tại)"}
+                                    </Text>
+                                )}
+                                {lastCheckInId && (
+                                    <PhotoUploadButton
+                                        destinationId={lastCheckInId}
+                                        latitude={checkInLocation?.latitude}
+                                        longitude={checkInLocation?.longitude}
+                                        onUploaded={() => setSnackMsg("📷 Đã upload ảnh!")}
+                                    />
+                                )}
+                            </Dialog.Content>
+                            <Dialog.Actions>
+                                <Button onPress={() => setShowCheckIn(false)}>Hủy</Button>
+                                <Button onPress={handleCheckIn} loading={checkingIn} disabled={!checkInName.trim()}>
+                                    Check-in
+                                </Button>
+                            </Dialog.Actions>
+                        </ScrollView>
+                    </KeyboardAvoidingView>
                 </Dialog>
             </Portal>
+
+            {/* Loading route overlay */}
+            {loadingRoute && (
+                <View style={styles.loadingOverlay}>
+                    <Surface style={[styles.loadingCard, { backgroundColor: paperTheme.colors.surface }]} elevation={5}>
+                        <IconButton
+                            icon="close"
+                            iconColor={paperTheme.colors.onSurfaceVariant}
+                            size={20}
+                            style={styles.loadingCloseBtn}
+                            onPress={cancelRouteLoading}
+                        />
+                        <ActivityIndicator size="large" color={paperTheme.colors.primary} />
+                        <Text variant="bodyMedium" style={{ marginTop: spacing.md, color: paperTheme.colors.onSurface, textAlign: "center" }}>
+                            Đang tìm đường đi...
+                        </Text>
+                    </Surface>
+                </View>
+            )}
 
             <Snackbar visible={!!snackMsg} onDismiss={() => setSnackMsg("")} duration={3000}>
                 {snackMsg}
@@ -331,6 +538,51 @@ const styles = StyleSheet.create({
     container: { flex: 1 },
     center: { flex: 1, justifyContent: "center", alignItems: "center" },
     map: { flex: 1 },
+    loadingOverlay: {
+        ...StyleSheet.absoluteFillObject,
+        backgroundColor: "rgba(0,0,0,0.4)",
+        justifyContent: "center", alignItems: "center",
+        zIndex: 999,
+    },
+    loadingCard: {
+        borderRadius: 20, padding: spacing.xl,
+        alignItems: "center", minWidth: 220,
+    },
+    loadingCloseBtn: {
+        position: "absolute", top: 4, right: 4,
+    },
+    navCard: {
+        position: "absolute", bottom: 0, left: 0, right: 0,
+        height: 260,
+        paddingHorizontal: spacing.lg,
+        paddingBottom: spacing.xl,
+        borderTopLeftRadius: 24, borderTopRightRadius: 24,
+        elevation: 8,
+        shadowColor: "#000", shadowOffset: { width: 0, height: -3 },
+        shadowOpacity: 0.15, shadowRadius: 6,
+    },
+    navHandle: {
+        alignItems: "center", paddingVertical: 10,
+    },
+    navHandlePill: {
+        width: 40, height: 4, borderRadius: 2,
+    },
+    navPeekRow: {
+        flexDirection: "row", alignItems: "center",
+    },
+    navExpandedContent: {
+        overflow: "hidden",
+    },
+    navInfoRow: {
+        flexDirection: "row", alignItems: "center", gap: 10,
+        marginTop: spacing.sm,
+    },
+    navDot: {
+        width: 10, height: 10, borderRadius: 5,
+    },
+    navStartBtn: {
+        marginTop: spacing.lg, borderRadius: 28, paddingVertical: 4,
+    },
     trackingBar: {
         position: "absolute", top: 0, left: 0, right: 0,
         paddingTop: 50, paddingBottom: spacing.md, paddingHorizontal: spacing.lg,
