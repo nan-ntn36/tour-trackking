@@ -17,10 +17,17 @@
       "infoPlist": {
         "NSLocationAlwaysAndWhenInUseUsageDescription": "App cần quyền truy cập vị trí để theo dõi quãng đường và chia sẻ vị trí với nhóm tour.",
         "NSLocationWhenInUseUsageDescription": "App cần quyền truy cập vị trí để hiển thị vị trí trên bản đồ.",
-        "UIBackgroundModes": ["location"]
+        "UIBackgroundModes": [
+          "location"
+        ]
       }
     },
     "android": {
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyDHGL5co-GsLLs8Ywk6E264otJlN-39-uE"
+        }
+      },
       "adaptiveIcon": {
         "backgroundColor": "#1a1a2e",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -32,7 +39,8 @@
         "ACCESS_COARSE_LOCATION",
         "ACCESS_BACKGROUND_LOCATION",
         "CAMERA"
-      ]
+      ],
+      "package": "com.anonymous.tourtrackking"
     },
     "web": {
       "favicon": "./assets/favicon.png"

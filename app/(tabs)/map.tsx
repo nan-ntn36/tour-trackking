@@ -11,7 +11,7 @@ import { useRouteTracking } from "../../src/hooks/useRouteTracking";
 import { useAuth } from "../../src/hooks/useAuth";
 import { saveRoute } from "../../src/services/route.service";
 import { checkIn, getVisibleDestinations } from "../../src/services/destination.service";
-import { formatDistance, formatDuration } from "../../src/utils/distance";
+import { formatDistance, formatDuration, haversineDistance, distanceToPolyline } from "../../src/utils/distance";
 import { getDirectionsWithInfo } from "../../src/services/directions.service";
 import RouteOverlay from "../../src/components/Map/RouteOverlay";
 import DestinationMarker from "../../src/components/Map/DestinationMarker";
@@ -20,7 +20,7 @@ import { useFocusEffect, useLocalSearchParams } from "expo-router";
 
 export default function MapScreen() {
     const { paperTheme } = useAppTheme();
-    const { location, errorMsg, permissionGranted } = useLocation();
+    const { location, errorMsg, permissionGranted, startWatching, stopWatching } = useLocation();
     const { isTracking, points, distanceKm, durationSeconds, startTracking, stopTracking } =
         useRouteTracking();
     const { user } = useAuth();
@@ -44,10 +44,18 @@ export default function MapScreen() {
 
     // Navigation route (đường đi đến điểm đến)
     const [navRoute, setNavRoute] = useState<{ latitude: number; longitude: number }[] | null>(null);
-    const [navInfo, setNavInfo] = useState<{ distanceKm: number; durationMinutes: number; destName: string } | null>(null);
+    const [displayRoute, setDisplayRoute] = useState<{ latitude: number; longitude: number }[] | null>(null);
+    const [navInfo, setNavInfo] = useState<{ distanceKm: number; durationMinutes: number; destName: string; destLat: number; destLng: number } | null>(null);
     const [loadingRoute, setLoadingRoute] = useState(false);
     const routeAbortRef = useRef<AbortController | null>(null);
     const [navCardExpanded, setNavCardExpanded] = useState(true);
+
+    // Navigation mode (điều hướng real-time)
+    const [isNavigating, setIsNavigating] = useState(false);
+    const [isRerouting, setIsRerouting] = useState(false);
+    const lastRerouteRef = useRef<number>(0);
+    const [remainingKm, setRemainingKm] = useState(0);
+    const [remainingMin, setRemainingMin] = useState(0);
 
     // Animated bottom card
     const NAV_CARD_HEIGHT = 260;
@@ -136,6 +144,8 @@ export default function MapScreen() {
                             distanceKm: result.distanceKm,
                             durationMinutes: result.durationMinutes,
                             destName: params.focusName || "Điểm đến",
+                            destLat: destLat,
+                            destLng: destLng,
                         });
                         mapRef.current?.fitToCoordinates(
                             [
@@ -174,9 +184,140 @@ export default function MapScreen() {
 
     // Xóa đường dẫn
     const clearNavRoute = () => {
+        if (isNavigating) handleStopNavigation();
         setNavRoute(null);
+        setDisplayRoute(null);
         setNavInfo(null);
     };
+
+    // Bắt đầu điều hướng
+    const handleStartNavigation = async () => {
+        if (!navInfo || !navRoute || !location) return;
+        setIsNavigating(true);
+        setRemainingKm(navInfo.distanceKm);
+        setRemainingMin(navInfo.durationMinutes);
+
+        // Bật GPS tracking liên tục
+        await startWatching();
+
+        // Camera follow user
+        if (mapRef.current) {
+            mapRef.current.animateCamera({
+                center: { latitude: location.latitude, longitude: location.longitude },
+                pitch: 45,
+                heading: location.heading ?? 0,
+                zoom: 17,
+            }, { duration: 800 });
+        }
+    };
+
+    // Dừng điều hướng
+    const handleStopNavigation = () => {
+        setIsNavigating(false);
+        // Tắt GPS tracking liên tục
+        stopWatching();
+        // Reset camera
+        if (location && mapRef.current) {
+            mapRef.current.animateCamera({
+                center: { latitude: location.latitude, longitude: location.longitude },
+                pitch: 0,
+                heading: 0,
+                zoom: 15,
+            }, { duration: 800 });
+        }
+    };
+
+    // Real-time tracking khi đang điều hướng
+    useEffect(() => {
+        if (!isNavigating || !location || !navInfo || !navRoute) return;
+
+        const userLat = location.latitude;
+        const userLng = location.longitude;
+
+        // Tính khoảng cách còn lại đến đích
+        const distKm = haversineDistance(userLat, userLng, navInfo.destLat, navInfo.destLng);
+        setRemainingKm(distKm);
+
+        // Ước tính thời gian còn lại
+        const avgSpeed = navInfo.distanceKm / navInfo.durationMinutes;
+        const estMin = avgSpeed > 0 ? distKm / avgSpeed : 0;
+        setRemainingMin(Math.max(estMin, 0));
+
+        // === Trim route: chỉ hiển phần còn lại phía trước ===
+        // Tìm segment gần user nhất trên navRoute
+        let nearestIdx = 0;
+        let nearestDist = Infinity;
+        for (let i = 0; i < navRoute.length; i++) {
+            const d = haversineDistance(userLat, userLng, navRoute[i].latitude, navRoute[i].longitude);
+            if (d < nearestDist) {
+                nearestDist = d;
+                nearestIdx = i;
+            }
+        }
+        // Tạo displayRoute: [vị trí user hiện tại, ...các điểm còn lại]
+        const remaining = navRoute.slice(nearestIdx + 1);
+        setDisplayRoute([
+            { latitude: userLat, longitude: userLng },
+            ...remaining,
+        ]);
+
+        // Camera follow user
+        if (mapRef.current) {
+            mapRef.current.animateCamera({
+                center: { latitude: userLat, longitude: userLng },
+                pitch: 45,
+                heading: location.heading ?? 0,
+                zoom: 17,
+            }, { duration: 800 });
+        }
+
+        // Tự động dừng khi đến đích (< 50m)
+        if (distKm < 0.05) {
+            setSnackMsg(`🎉 Đã đến ${navInfo.destName}!`);
+            handleStopNavigation();
+            clearNavRoute();
+            return;
+        }
+
+        // === Auto-reroute khi đi sai đường (> 50m từ route) ===
+        const offRouteKm = distanceToPolyline(userLat, userLng, navRoute);
+        const REROUTE_THRESHOLD_KM = 0.05; // 50m
+        const REROUTE_COOLDOWN_MS = 10_000; // 10 giây
+        const now = Date.now();
+
+        if (offRouteKm > REROUTE_THRESHOLD_KM && !isRerouting && (now - lastRerouteRef.current > REROUTE_COOLDOWN_MS)) {
+            lastRerouteRef.current = now;
+            setIsRerouting(true);
+            setSnackMsg("🔄 Đang vẽ lại đường...");
+
+            getDirectionsWithInfo(
+                { latitude: userLat, longitude: userLng },
+                { latitude: navInfo.destLat, longitude: navInfo.destLng }
+            )
+                .then((result) => {
+                    // Lưu route mới và reset displayRoute
+                    setNavRoute(result.coordinates);
+                    setDisplayRoute([
+                        { latitude: userLat, longitude: userLng },
+                        ...result.coordinates,
+                    ]);
+                    setNavInfo((prev) => prev ? {
+                        ...prev,
+                        distanceKm: result.distanceKm,
+                        durationMinutes: result.durationMinutes,
+                    } : prev);
+                    setRemainingKm(result.distanceKm);
+                    setRemainingMin(result.durationMinutes);
+                    setSnackMsg("✅ Đã vẽ lại đường mới!");
+                })
+                .catch((err) => {
+                    setSnackMsg(`⚠️ Không thể vẽ lại: ${err.message}`);
+                })
+                .finally(() => {
+                    setIsRerouting(false);
+                });
+        }
+    }, [isNavigating, location?.latitude, location?.longitude]);
 
     // Center map khi có vị trí lần đầu (nếu không có focus params)
     useEffect(() => {
@@ -263,6 +404,7 @@ export default function MapScreen() {
         }
     };
 
+
     if (!permissionGranted && errorMsg) {
         return (
             <View style={[styles.center, { backgroundColor: paperTheme.colors.background }]}>
@@ -292,12 +434,28 @@ export default function MapScreen() {
                 {isTracking && points.length >= 2 && <RouteOverlay coordinates={points} />}
 
                 {/* Navigation route polyline */}
-                {navRoute && navRoute.length >= 2 && (
+                {isNavigating && displayRoute && displayRoute.length >= 2 ? (
+                    <Polyline
+                        coordinates={displayRoute}
+                        strokeColor="#1565C0"
+                        strokeWidth={6}
+                        lineDashPattern={[0]}
+                    />
+                ) : navRoute && navRoute.length >= 2 ? (
                     <Polyline
                         coordinates={navRoute}
                         strokeColor="#2196F3"
                         strokeWidth={5}
                         lineDashPattern={[10, 5]}
+                    />
+                ) : null}
+
+                {/* Destination marker khi đang điều hướng */}
+                {isNavigating && navInfo && (
+                    <Marker
+                        coordinate={{ latitude: navInfo.destLat, longitude: navInfo.destLng }}
+                        pinColor="#1565C0"
+                        title={navInfo.destName}
                     />
                 )}
 
@@ -326,8 +484,36 @@ export default function MapScreen() {
                 )}
             </MapView>
 
-            {/* Navigation bottom card — swipeable */}
-            {navInfo && (
+            {/* Navigation mode bar (khi đang điều hướng) */}
+            {isNavigating && navInfo && (
+                <Surface style={[styles.navModeBar, { backgroundColor: "#1565C0" }]} elevation={5}>
+                    <View style={styles.navModeContent}>
+                        <View style={{ flex: 1 }}>
+                            <Text variant="headlineSmall" style={{ color: "#fff", fontWeight: "bold" }}>
+                                {formatDistance(remainingKm)}
+                            </Text>
+                            <Text variant="bodySmall" style={{ color: "rgba(255,255,255,0.8)" }}>
+                                {Math.ceil(remainingMin)} phút • {navInfo.destName}
+                            </Text>
+                            {isRerouting && (
+                                <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 2 }}>
+                                    <ActivityIndicator size="small" color="#fff" />
+                                    <Text variant="labelSmall" style={{ color: "#fff" }}>Đang vẽ lại đường...</Text>
+                                </View>
+                            )}
+                        </View>
+                        <IconButton
+                            icon="close"
+                            iconColor="#fff"
+                            size={24}
+                            onPress={handleStopNavigation}
+                        />
+                    </View>
+                </Surface>
+            )}
+
+            {/* Navigation bottom card — swipeable (ẩn khi đang điều hướng) */}
+            {navInfo && !isNavigating && (
                 <Animated.View
                     style={[
                         styles.navCard,
@@ -375,12 +561,13 @@ export default function MapScreen() {
                             </Text>
                         </View>
 
-                        {/* Start button */}
+                        {/* Start navigation button */}
                         <Button
                             mode="contained"
-                            onPress={clearNavRoute}
-                            style={[styles.navStartBtn, { backgroundColor: paperTheme.colors.onSurface }]}
-                            labelStyle={{ color: paperTheme.colors.surface, fontWeight: "bold", fontSize: 16 }}
+                            onPress={handleStartNavigation}
+                            icon="navigation-variant"
+                            style={[styles.navStartBtn, { backgroundColor: "#1565C0" }]}
+                            labelStyle={{ color: "#fff", fontWeight: "bold", fontSize: 16 }}
                         >
                             Bắt đầu
                         </Button>
@@ -442,10 +629,11 @@ export default function MapScreen() {
                     size={24}
                     onPress={centerOnMe}
                 />
+
             </View>
 
-            {/* FAB Start/Stop — ẩn khi nav card expanded */}
-            {(!navInfo || !navCardExpanded) && (
+            {/* FAB Start/Stop — ẩn khi đang điều hướng hoặc nav card expanded */}
+            {!isNavigating && (!navInfo || !navCardExpanded) && (
                 <FAB
                     icon={isTracking ? "stop" : "play"}
                     label={isTracking ? "Dừng" : "Bắt đầu"}
@@ -582,6 +770,14 @@ const styles = StyleSheet.create({
     },
     navStartBtn: {
         marginTop: spacing.lg, borderRadius: 28, paddingVertical: 4,
+    },
+    navModeBar: {
+        position: "absolute", top: 0, left: 0, right: 0,
+        paddingTop: 50, paddingBottom: spacing.md, paddingHorizontal: spacing.lg,
+        borderBottomLeftRadius: 20, borderBottomRightRadius: 20,
+    },
+    navModeContent: {
+        flexDirection: "row", alignItems: "center",
     },
     trackingBar: {
         position: "absolute", top: 0, left: 0, right: 0,

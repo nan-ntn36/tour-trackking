@@ -2,7 +2,7 @@
 const ORS_KEY = process.env.EXPO_PUBLIC_ORS_API_KEY || "";
 
 const OSRM_SERVERS = [
-    "https://routing.openstreetmap.de/routed-car",
+    "https://routing.openstreetmap.de/routed-bike",
     "https://router.project-osrm.org",
 ];
 
@@ -46,7 +46,7 @@ async function fetchORS(
     signal?: AbortSignal
 ): Promise<{ coordinates: Coordinate[]; distanceKm: number; durationMinutes: number }> {
     const url =
-        `https://api.openrouteservice.org/v2/directions/driving-car` +
+        `https://api.openrouteservice.org/v2/directions/cycling-regular` +
         `?api_key=${ORS_KEY}` +
         `&start=${origin.longitude},${origin.latitude}` +
         `&end=${destination.longitude},${destination.latitude}`;

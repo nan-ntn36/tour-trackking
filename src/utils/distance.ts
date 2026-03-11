@@ -56,3 +56,45 @@ export function formatDuration(seconds: number): string {
     }
     return `${m}:${String(s).padStart(2, "0")}`;
 }
+
+// Khoảng cách gần nhất từ một điểm đến polyline (km)
+export function distanceToPolyline(
+    lat: number,
+    lng: number,
+    route: { latitude: number; longitude: number }[]
+): number {
+    if (route.length === 0) return Infinity;
+    if (route.length === 1) return haversineDistance(lat, lng, route[0].latitude, route[0].longitude);
+
+    let minDist = Infinity;
+    for (let i = 0; i < route.length - 1; i++) {
+        const dist = distanceToSegment(
+            lat, lng,
+            route[i].latitude, route[i].longitude,
+            route[i + 1].latitude, route[i + 1].longitude
+        );
+        if (dist < minDist) minDist = dist;
+    }
+    return minDist;
+}
+
+// Khoảng cách từ điểm P đến đoạn thẳng AB (km)
+function distanceToSegment(
+    pLat: number, pLng: number,
+    aLat: number, aLng: number,
+    bLat: number, bLng: number
+): number {
+    const dAB = haversineDistance(aLat, aLng, bLat, bLng);
+    if (dAB < 0.001) return haversineDistance(pLat, pLng, aLat, aLng);
+
+    const dx = bLat - aLat;
+    const dy = bLng - aLng;
+    const px = pLat - aLat;
+    const py = pLng - aLng;
+    let t = (px * dx + py * dy) / (dx * dx + dy * dy);
+    t = Math.max(0, Math.min(1, t));
+
+    const closestLat = aLat + t * dx;
+    const closestLng = aLng + t * dy;
+    return haversineDistance(pLat, pLng, closestLat, closestLng);
+}
