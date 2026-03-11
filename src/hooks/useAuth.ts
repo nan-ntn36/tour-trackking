@@ -73,5 +73,8 @@ export function useAuth() {
         profile: state.profile,
         loading: state.loading,
         isAuthenticated: !!state.session,
+        refreshProfile: () => {
+            if (state.user) fetchProfile(state.user.id);
+        },
     };
 }

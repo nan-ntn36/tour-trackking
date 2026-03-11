@@ -1,5 +1,5 @@
 import React from "react";
-import { View, StyleSheet, Image, Dimensions } from "react-native";
+import { View, StyleSheet, Image, Dimensions, Pressable } from "react-native";
 import { Text } from "react-native-paper";
 import { spacing } from "../../theme/spacing";
 
@@ -9,9 +9,10 @@ const THUMB_SIZE = (SCREEN_WIDTH - spacing.md * 2 - spacing.sm * 4) / 4;
 type Props = {
     photos: { id: string; cloudinary_url: string }[];
     maxShow?: number;
+    onPhotoPress?: (index: number) => void;
 };
 
-export default function PhotoPreviewGrid({ photos, maxShow = 4 }: Props) {
+export default function PhotoPreviewGrid({ photos, maxShow = 4, onPhotoPress }: Props) {
     if (!photos || photos.length === 0) return null;
 
     const visiblePhotos = photos.slice(0, maxShow);
@@ -23,18 +24,20 @@ export default function PhotoPreviewGrid({ photos, maxShow = 4 }: Props) {
                 const isLast = index === maxShow - 1 && extraCount > 0;
 
                 return (
-                    <View key={photo.id} style={styles.thumbWrapper}>
-                        <Image
-                            source={{ uri: photo.cloudinary_url }}
-                            style={styles.thumb}
-                            resizeMode="cover"
-                        />
-                        {isLast && (
-                            <View style={styles.overlay}>
-                                <Text style={styles.overlayText}>+{extraCount}</Text>
-                            </View>
-                        )}
-                    </View>
+                    <Pressable key={photo.id} onPress={() => onPhotoPress?.(index)}>
+                        <View style={styles.thumbWrapper}>
+                            <Image
+                                source={{ uri: photo.cloudinary_url }}
+                                style={styles.thumb}
+                                resizeMode="cover"
+                            />
+                            {isLast && (
+                                <View style={styles.overlay}>
+                                    <Text style={styles.overlayText}>+{extraCount}</Text>
+                                </View>
+                            )}
+                        </View>
+                    </Pressable>
                 );
             })}
         </View>

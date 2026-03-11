@@ -11,6 +11,7 @@ import { useRouteTracking } from "../../src/hooks/useRouteTracking";
 import { useAuth } from "../../src/hooks/useAuth";
 import { saveRoute } from "../../src/services/route.service";
 import { checkIn, getVisibleDestinations } from "../../src/services/destination.service";
+import { updateMyLocation, getMemberLocations, getTourDestinations } from "../../src/services/tour.service";
 import { formatDistance, formatDuration, haversineDistance, distanceToPolyline } from "../../src/utils/distance";
 import { getDirectionsWithInfo } from "../../src/services/directions.service";
 import RouteOverlay from "../../src/components/Map/RouteOverlay";
@@ -105,8 +106,14 @@ export default function MapScreen() {
         }
     }, [navInfo]);
 
-    // Nhận params từ Destinations tab
-    const params = useLocalSearchParams<{ focusLat?: string; focusLng?: string; focusName?: string; _ts?: string }>();
+    // Nhận params từ Destinations tab hoặc Tours tab
+    const params = useLocalSearchParams<{ focusLat?: string; focusLng?: string; focusName?: string; tourId?: string; tourName?: string; _ts?: string }>();
+
+    // Tour mode state
+    const [activeTourId, setActiveTourId] = useState<string | null>(null);
+    const [activeTourName, setActiveTourName] = useState<string>("");
+    const [memberLocations, setMemberLocations] = useState<any[]>([]);
+    const [tourDests, setTourDests] = useState<any[]>([]);
 
     // Load destinations khi focus tab
     useFocusEffect(
@@ -118,6 +125,67 @@ export default function MapScreen() {
             }
         }, [user])
     );
+
+    // Tour mode: activate when tourId param received
+    useEffect(() => {
+        if (params.tourId && params.tourId !== activeTourId) {
+            setActiveTourId(params.tourId);
+            setActiveTourName(params.tourName || "Tour");
+        }
+    }, [params.tourId, params._ts]);
+
+    // Tour mode: broadcast location + fetch member locations every 10s
+    useEffect(() => {
+        if (!activeTourId || !user || !location) return;
+
+        // Broadcast own location immediately
+        updateMyLocation(user.id, activeTourId, location.latitude, location.longitude).catch(() => {});
+
+        // Fetch member locations immediately
+        const fetchMembers = () => {
+            getMemberLocations(activeTourId!)
+                .then(setMemberLocations)
+                .catch(() => {});
+        };
+        fetchMembers();
+
+        // Fetch tour destinations
+        getTourDestinations(activeTourId)
+            .then(setTourDests)
+            .catch(() => {});
+
+        // Set up interval
+        const interval = setInterval(() => {
+            if (location) {
+                updateMyLocation(user.id, activeTourId!, location.latitude, location.longitude).catch(() => {});
+            }
+            fetchMembers();
+        }, 10000);
+
+        return () => clearInterval(interval);
+    }, [activeTourId, user, location?.latitude, location?.longitude]);
+
+    // Tour mode: fit camera to all members when first loaded
+    useEffect(() => {
+        if (activeTourId && memberLocations.length > 1 && mapRef.current) {
+            const coords = memberLocations
+                .filter(m => m.last_latitude && m.last_longitude)
+                .map(m => ({ latitude: m.last_latitude, longitude: m.last_longitude }));
+            if (coords.length > 1) {
+                mapRef.current.fitToCoordinates(coords, {
+                    edgePadding: { top: 120, right: 60, bottom: 100, left: 60 },
+                    animated: true,
+                });
+            }
+        }
+    }, [activeTourId, memberLocations.length]);
+
+    const closeTourMode = () => {
+        setActiveTourId(null);
+        setActiveTourName("");
+        setMemberLocations([]);
+        setTourDests([]);
+    };
 
     // Center map + vẽ đường đi đến destination được chọn từ danh sách
     useEffect(() => {
@@ -473,6 +541,59 @@ export default function MapScreen() {
                     ) : null
                 ))}
 
+                {/* Tour member markers */}
+                {activeTourId && memberLocations.map((member) => {
+                    if (!member.last_latitude || !member.last_longitude) return null;
+                    const profile = member.profiles;
+                    const isSelf = member.user_id === user?.id;
+                    const name = profile?.display_name || "?";
+                    const initial = name.charAt(0).toUpperCase();
+                    const isOwner = member.role === "owner";
+                    const bgColor = isSelf ? "#4CAF50" : isOwner ? "#FF9800" : "#2196F3";
+                    const minutesAgo = member.last_updated_at
+                        ? Math.round((Date.now() - new Date(member.last_updated_at).getTime()) / 60000)
+                        : null;
+
+                    return (
+                        <Marker
+                            key={`tour-member-${member.user_id}`}
+                            coordinate={{ latitude: member.last_latitude, longitude: member.last_longitude }}
+                            title={isSelf ? `${name} (Bạn)` : name}
+                            description={minutesAgo !== null ? (minutesAgo < 1 ? "Vừa cập nhật" : `${minutesAgo} phút trước`) : undefined}
+                            anchor={{ x: 0.5, y: 0.5 }}
+                        >
+                            <View style={{
+                                backgroundColor: bgColor,
+                                width: 36, height: 36,
+                                borderRadius: 18,
+                                justifyContent: "center", alignItems: "center",
+                                borderWidth: 3, borderColor: "#fff",
+                                elevation: 4,
+                                shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+                                shadowOpacity: 0.3, shadowRadius: 3,
+                            }}>
+                                <Text style={{ color: "#fff", fontWeight: "bold", fontSize: 14 }}>
+                                    {initial}
+                                </Text>
+                            </View>
+                        </Marker>
+                    );
+                })}
+
+                {/* Tour destination markers */}
+                {activeTourId && tourDests.map((td) => {
+                    const dest = td.destinations;
+                    if (!dest?.latitude || !dest?.longitude) return null;
+                    return (
+                        <Marker
+                            key={`tour-dest-${td.id}`}
+                            coordinate={{ latitude: dest.latitude, longitude: dest.longitude }}
+                            title={dest.name}
+                            pinColor="#E91E63"
+                        />
+                    );
+                })}
+
                 {/* Marker tạm thời khi long-press — nhấn giữ chỗ khác để di chuyển */}
                 {selectedLocation && (
                     <Marker
@@ -597,6 +718,28 @@ export default function MapScreen() {
                             </Text>
                             <Text variant="bodySmall" style={{ color: paperTheme.colors.onPrimaryContainer }}>Điểm GPS</Text>
                         </View>
+                    </View>
+                </Surface>
+            )}
+
+            {/* Tour mode banner */}
+            {activeTourId && !isTracking && !isNavigating && (
+                <Surface style={[styles.navModeBar, { backgroundColor: '#1565C0' }]} elevation={3}>
+                    <View style={{ flexDirection: "row", alignItems: "center" }}>
+                        <View style={{ flex: 1 }}>
+                            <Text variant="titleMedium" style={{ color: "#fff", fontWeight: "bold" }}>
+                                🗺️ {activeTourName}
+                            </Text>
+                            <Text variant="bodySmall" style={{ color: "rgba(255,255,255,0.8)" }}>
+                                👥 {memberLocations.length} thành viên đang chia sẻ vị trí
+                            </Text>
+                        </View>
+                        <IconButton
+                            icon="close"
+                            iconColor="#fff"
+                            size={22}
+                            onPress={closeTourMode}
+                        />
                     </View>
                 </Surface>
             )}
