@@ -4,6 +4,10 @@
 
 ---
 
+> 📖 **[Xem tài liệu kỹ thuật chi tiết (DOCUMENT.md)](./DOCUMENT.md)** — Mô tả cách triển khai từng chức năng, API, công thức tính toán, database schema, và hướng dẫn cấu hình.
+
+---
+
 ## 📱 Tính năng chính
 
 ### 🗺️ Bản đồ (Map)
