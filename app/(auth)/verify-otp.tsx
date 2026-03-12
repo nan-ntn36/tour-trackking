@@ -12,7 +12,7 @@ export default function VerifyOtpScreen() {
     const params = useLocalSearchParams<{ email: string }>();
     const email = params.email || "";
 
-    const [otp, setOtp] = useState(["", "", "", "", "", ""]);
+    const [otp, setOtp] = useState(["", "", "", "", "", "", "", ""]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
     const [resendCooldown, setResendCooldown] = useState(60);
@@ -35,12 +35,12 @@ export default function VerifyOtpScreen() {
         setError("");
 
         // Auto-focus next input
-        if (value && index < 5) {
+        if (value && index < 7) {
             inputRefs.current[index + 1]?.focus();
         }
 
-        // Auto-submit when all 6 digits entered
-        if (value && index === 5 && newOtp.every((d) => d !== "")) {
+        // Auto-submit when all 8 digits entered
+        if (value && index === 7 && newOtp.every((d) => d !== "")) {
             handleVerify(newOtp.join(""));
         }
     };
@@ -53,8 +53,8 @@ export default function VerifyOtpScreen() {
 
     const handleVerify = async (code?: string) => {
         const otpCode = code || otp.join("");
-        if (otpCode.length !== 6) {
-            setError("Vui lòng nhập đủ 6 số");
+        if (otpCode.length !== 8) {
+            setError("Vui lòng nhập đủ 8 số");
             return;
         }
         setError("");
@@ -68,7 +68,7 @@ export default function VerifyOtpScreen() {
             );
         } catch (err: any) {
             setError(err.message || "Mã xác thực không đúng");
-            setOtp(["", "", "", "", "", ""]);
+            setOtp(["", "", "", "", "", "", "", ""]);
             inputRefs.current[0]?.focus();
         } finally {
             setLoading(false);
@@ -103,7 +103,7 @@ export default function VerifyOtpScreen() {
                         Xác thực email
                     </Text>
                     <Text variant="bodyMedium" style={{ color: colors.onSurfaceVariant, textAlign: "center", marginTop: spacing.sm }}>
-                        Chúng tôi đã gửi mã 6 số đến
+                        Chúng tôi đã gửi mã 8 số đến
                     </Text>
                     <Text variant="titleSmall" style={{ color: colors.primary, fontWeight: "bold", marginTop: 4 }}>
                         {email}
@@ -201,7 +201,7 @@ const styles = StyleSheet.create({
         marginBottom: spacing.md,
     },
     otpInput: {
-        width: 48,
+        width: 38,
         textAlign: "center",
     },
     otpInputContent: {
