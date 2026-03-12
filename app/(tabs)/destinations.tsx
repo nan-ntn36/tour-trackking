@@ -1,43 +1,33 @@
-import { useState, useCallback, useRef } from "react";
-import { View, StyleSheet, FlatList, Alert, Pressable, Modal, Image, Dimensions, ScrollView } from "react-native";
+import { useState, useCallback, useRef, useEffect } from "react";
+import { View, StyleSheet, FlatList, Alert, Pressable, Modal, Image, Dimensions } from "react-native";
 import {
-    Text, Searchbar, Surface, IconButton, Chip, Divider, ActivityIndicator, SegmentedButtons,
+    Text, Searchbar, Surface, IconButton, Chip, Divider,
 } from "react-native-paper";
 import { useAppTheme } from "../../src/theme/ThemeProvider";
 import { spacing, borderRadius } from "../../src/theme/spacing";
 import { useAuth } from "../../src/hooks/useAuth";
 import {
-    getDestinations, searchDestinations, toggleFavorite, toggleVisibility, deleteDestination,
+    getDestinations, searchDestinations, toggleFavorite, toggleVisibility, deleteDestination, deleteAllDestinations,
 } from "../../src/services/destination.service";
 import { getUserPhotos, deletePhotosByDestination } from "../../src/services/photo.service";
-import { getNearbyPOIs, POI_CATEGORIES, type POI, type POICategory } from "../../src/services/poi.service";
 import { useLocation } from "../../src/hooks/useLocation";
 import { haversineDistance, formatDistance } from "../../src/utils/distance";
 import PhotoUploadButton from "../../src/components/Photo/PhotoUploadButton";
 import PhotoPreviewGrid from "../../src/components/Photo/PhotoPreviewGrid";
+import AuthGuard from "../../src/components/Auth/AuthGuard";
 import { useFocusEffect, router } from "expo-router";
 
 type Filter = "all" | "favorites" | "hidden";
-type TabMode = "destinations" | "explore";
 
 export default function DestinationsScreen() {
     const { paperTheme } = useAppTheme();
-    const { user } = useAuth();
+    const { user, loading: authLoading } = useAuth();
     const { location } = useLocation();
-    const [tabMode, setTabMode] = useState<TabMode>("destinations");
     const [destinations, setDestinations] = useState<any[]>([]);
     const [destPhotos, setDestPhotos] = useState<Record<string, any[]>>({});
     const [filter, setFilter] = useState<Filter>("all");
     const [searchQuery, setSearchQuery] = useState("");
     const [loading, setLoading] = useState(false);
-
-    // Explore tab state
-    const [pois, setPois] = useState<POI[]>([]);
-    const [poisLoading, setPoisLoading] = useState(false);
-    const [poiFilter, setPoiFilter] = useState<POICategory | "all">("all");
-    const [poisLoaded, setPoisLoaded] = useState(false);
-    const [poiRadius, setPoiRadius] = useState(1500);
-    const [poiSearch, setPoiSearch] = useState("");
 
     // Photo viewer
     const [viewerPhotos, setViewerPhotos] = useState<any[]>([]);
@@ -53,6 +43,16 @@ export default function DestinationsScreen() {
         setViewerTitle(title);
         setViewerVisible(true);
     };
+
+    // Clear data on logout
+    useEffect(() => {
+        if (!user) {
+            setDestinations([]);
+            setDestPhotos({});
+            setSearchQuery("");
+            setFilter("all");
+        }
+    }, [user]);
 
     // Load destinations
     const loadData = useCallback(async () => {
@@ -139,6 +139,36 @@ export default function DestinationsScreen() {
         ]);
     };
 
+    // Xóa tất cả
+    const handleDeleteAll = () => {
+        if (!user || destinations.length === 0) return;
+        Alert.alert(
+            "Xóa tất cả check-in?",
+            `Bạn có chắc muốn xóa tất cả ${destinations.length} điểm đến? Hành động này không thể hoàn tác.`,
+            [
+                { text: "Hủy", style: "cancel" },
+                {
+                    text: "Xóa tất cả",
+                    style: "destructive",
+                    onPress: async () => {
+                        try {
+                            // Xóa ảnh Cloudinary cho tất cả destinations
+                            await Promise.allSettled(
+                                destinations.map((d) => deletePhotosByDestination(d.id))
+                            );
+                            // Xóa tất cả destinations
+                            await deleteAllDestinations(user.id);
+                            setDestinations([]);
+                            setDestPhotos({});
+                        } catch (err: any) {
+                            Alert.alert("Lỗi", err.message);
+                        }
+                    },
+                },
+            ]
+        );
+    };
+
     // Format date
     const formatDate = (iso: string) => {
         const d = new Date(iso);
@@ -154,157 +184,112 @@ export default function DestinationsScreen() {
                     focusLat: item.latitude.toString(),
                     focusLng: item.longitude.toString(),
                     focusName: item.name,
+                    destId: item.id,
                     _ts: Date.now().toString(),
                 },
             });
         }
     };
 
+
     const renderItem = ({ item }: { item: any }) => (
         <Pressable onPress={() => handleGoToMap(item)}>
-            <Surface style={styles.card} elevation={1}>
-                <View style={styles.cardContent}>
-                    <View style={styles.cardLeft}>
-                        <Text variant="titleMedium">
-                            {item.is_favorite ? "⭐ " : "📍 "}
+            <Surface style={[styles.card, { backgroundColor: paperTheme.colors.surface }]} elevation={2}>
+                <View style={styles.cardRow}>
+                    {/* Left: circular icon */}
+                    <View style={[styles.cardAvatar, { backgroundColor: item.is_favorite ? "#FFF3E0" : paperTheme.colors.primaryContainer }]}>
+                        <Text style={{ fontSize: 22 }}>{item.is_favorite ? "⭐" : "📍"}</Text>
+                    </View>
+
+                    {/* Center: info */}
+                    <View style={styles.cardInfo}>
+                        <Text variant="titleSmall" style={{ fontWeight: "bold", color: paperTheme.colors.onSurface }} numberOfLines={1}>
                             {item.name}
                         </Text>
+                        <Text variant="bodySmall" style={{ color: paperTheme.colors.onSurfaceVariant, marginTop: 2 }} numberOfLines={1}>
+                            {item.description || formatDate(item.checked_in_at)}
+                            {!item.is_visible ? " • Đã ẩn" : ""}
+                        </Text>
                         {item.description ? (
-                            <Text variant="bodySmall" style={{ color: paperTheme.colors.onSurfaceVariant, marginTop: 2 }}>
-                                {item.description}
+                            <Text variant="labelSmall" style={{ color: paperTheme.colors.outline, marginTop: 2 }}>
+                                {formatDate(item.checked_in_at)}
                             </Text>
                         ) : null}
-                        <Text variant="bodySmall" style={{ color: paperTheme.colors.outline, marginTop: 4 }}>
-                            {formatDate(item.checked_in_at)}
-                            {!item.is_visible ? " • 👁️‍🗨️ Đã ẩn" : ""}
-                        </Text>
                     </View>
-                    <View style={styles.cardActions}>
-                        <IconButton
-                            icon={item.is_favorite ? "star" : "star-outline"}
-                            iconColor={item.is_favorite ? "#FFD700" : paperTheme.colors.outline}
-                            size={20}
-                            onPress={() => handleFavorite(item.id, item.is_favorite)}
-                        />
-                        <IconButton
-                            icon={item.is_visible ? "eye" : "eye-off"}
-                            iconColor={paperTheme.colors.outline}
-                            size={20}
-                            onPress={() => handleVisibility(item.id, item.is_visible)}
-                        />
-                        <IconButton
-                            icon="delete-outline"
-                            iconColor={paperTheme.colors.error}
-                            size={20}
-                            onPress={() => handleDelete(item.id, item.name)}
-                        />
-                    </View>
+
+                    {/* Right: stacked photo thumbnails */}
+                    {(destPhotos[item.id] || []).length > 1 ? (
+                        <Pressable onPress={() => openViewer(destPhotos[item.id], 0, item.name)} style={styles.cardThumbStack}>
+                            {/* Back photo (tilted) */}
+                            <Image
+                                source={{ uri: destPhotos[item.id][1].cloudinary_url }}
+                                style={[styles.cardThumb, styles.cardThumbBack]}
+                                resizeMode="cover"
+                            />
+                            {/* Front photo */}
+                            <Image
+                                source={{ uri: destPhotos[item.id][0].cloudinary_url }}
+                                style={[styles.cardThumb, styles.cardThumbFront]}
+                                resizeMode="cover"
+                            />
+                            {/* Badge */}
+                            <View style={styles.cardThumbBadge}>
+                                <Text style={styles.cardThumbBadgeText}>+{destPhotos[item.id].length - 1}</Text>
+                            </View>
+                        </Pressable>
+                    ) : (destPhotos[item.id] || []).length === 1 ? (
+                        <Pressable onPress={() => openViewer(destPhotos[item.id], 0, item.name)}>
+                            <Image
+                                source={{ uri: destPhotos[item.id][0].cloudinary_url }}
+                                style={styles.cardThumb}
+                                resizeMode="cover"
+                            />
+                        </Pressable>
+                    ) : (
+                        <View style={[styles.cardThumb, { backgroundColor: paperTheme.colors.surfaceVariant, justifyContent: "center", alignItems: "center" }]}>
+                            <Text style={{ fontSize: 16, opacity: 0.4 }}>📷</Text>
+                        </View>
+                    )}
                 </View>
-                {/* Photo thumbnails */}
-                <PhotoPreviewGrid
-                    photos={destPhotos[item.id] || []}
-                    onPhotoPress={(index) => openViewer(destPhotos[item.id] || [], index, item.name)}
-                />
-                {/* Upload button */}
-                <PhotoUploadButton
-                    destinationId={item.id}
-                    latitude={item.latitude}
-                    longitude={item.longitude}
-                    onUploaded={loadData}
-                />
+
+                {/* Bottom actions row */}
+                <View style={styles.cardActions}>
+                    <IconButton
+                        icon={item.is_favorite ? "star" : "star-outline"}
+                        iconColor={item.is_favorite ? "#FFD700" : paperTheme.colors.outline}
+                        size={18}
+                        onPress={() => handleFavorite(item.id, item.is_favorite)}
+                        style={{ margin: 0 }}
+                    />
+                    <IconButton
+                        icon={item.is_visible ? "eye" : "eye-off"}
+                        iconColor={paperTheme.colors.outline}
+                        size={18}
+                        onPress={() => handleVisibility(item.id, item.is_visible)}
+                        style={{ margin: 0 }}
+                    />
+                    <PhotoUploadButton
+                        destinationId={item.id}
+                        latitude={item.latitude}
+                        longitude={item.longitude}
+                        onUploaded={loadData}
+                    />
+                    <View style={{ flex: 1 }} />
+                    <IconButton
+                        icon="delete-outline"
+                        iconColor={paperTheme.colors.error}
+                        size={18}
+                        onPress={() => handleDelete(item.id, item.name)}
+                        style={{ margin: 0 }}
+                    />
+                </View>
             </Surface>
         </Pressable>
     );
 
-    // ==================== Explore Tab ====================
-    const loadPOIs = async () => {
-        if (!location) {
-            Alert.alert("Chưa có vị trí", "Vui lòng bật GPS để khám phá địa điểm xung quanh.");
-            return;
-        }
-        setPoisLoading(true);
-        try {
-            const result = await getNearbyPOIs(location.latitude, location.longitude, poiRadius);
-            setPois(result);
-            setPoisLoaded(true);
-        } catch (err: any) {
-            Alert.alert("Lỗi", err.message || "Không thể tải POI");
-        } finally {
-            setPoisLoading(false);
-        }
-    };
-
-    const handleGoToPOI = (poi: POI) => {
-        router.navigate({
-            pathname: "/(tabs)/map",
-            params: {
-                focusLat: poi.lat.toString(),
-                focusLng: poi.lon.toString(),
-                focusName: poi.name,
-                _ts: Date.now().toString(),
-            },
-        });
-    };
-
-    const filteredPOIs = pois.filter(p => {
-        const matchCat = poiFilter === "all" || p.category === poiFilter;
-        const matchSearch = !poiSearch || p.name.toLowerCase().includes(poiSearch.toLowerCase());
-        return matchCat && matchSearch;
-    });
-
-    const renderPOIItem = ({ item }: { item: POI }) => {
-        const dist = location
-            ? haversineDistance(location.latitude, location.longitude, item.lat, item.lon)
-            : null;
-
-        return (
-            <Pressable onPress={() => handleGoToPOI(item)}>
-                <Surface style={styles.card} elevation={1}>
-                    <View style={styles.cardContent}>
-                        <Text style={{ fontSize: 28 }}>{item.icon}</Text>
-                        <View style={{ flex: 1, marginLeft: spacing.sm }}>
-                            <Text variant="titleSmall" numberOfLines={1}>{item.name}</Text>
-                            <Text variant="bodySmall" style={{ color: paperTheme.colors.onSurfaceVariant }}>
-                                {item.categoryLabel}{dist !== null ? ` • ${formatDistance(dist)}` : ""}
-                            </Text>
-                        </View>
-                        <IconButton icon="map-marker-right" size={20} iconColor={paperTheme.colors.primary} onPress={() => handleGoToPOI(item)} style={{ margin: 0 }} />
-                    </View>
-                </Surface>
-            </Pressable>
-        );
-    };
-
     return (
+        <AuthGuard isAuthenticated={!!user} loading={authLoading}>
         <View style={[styles.container, { backgroundColor: paperTheme.colors.background }]}>
-            {/* Top tab selector */}
-            <View style={styles.tabRow}>
-                <Pressable
-                    onPress={() => setTabMode("destinations")}
-                    style={[styles.tabBtn, tabMode === "destinations" && { borderBottomColor: paperTheme.colors.primary, borderBottomWidth: 2 }]}
-                >
-                    <Text variant="titleSmall" style={{ color: tabMode === "destinations" ? paperTheme.colors.primary : paperTheme.colors.onSurfaceVariant, fontWeight: "bold" }}>
-                        📍 Điểm đến
-                    </Text>
-                </Pressable>
-                <Pressable
-                    onPress={() => {
-                        setTabMode("explore");
-                        if (!poisLoaded) loadPOIs();
-                    }}
-                    style={[styles.tabBtn, tabMode === "explore" && { borderBottomColor: paperTheme.colors.primary, borderBottomWidth: 2 }]}
-                >
-                    <Text variant="titleSmall" style={{ color: tabMode === "explore" ? paperTheme.colors.primary : paperTheme.colors.onSurfaceVariant, fontWeight: "bold" }}>
-                        🔍 Khám phá
-                    </Text>
-                </Pressable>
-            </View>
-
-            <Divider />
-
-            {/* ==================== Destinations Tab ==================== */}
-            {tabMode === "destinations" && (
-                <>
             {/* Search */}
             <Searchbar
                 placeholder="Tìm điểm đến..."
@@ -325,6 +310,17 @@ export default function DestinationsScreen() {
                 <Chip selected={filter === "hidden"} onPress={() => setFilter("hidden")} style={styles.chip} icon="eye-off">
                     Đã ẩn
                 </Chip>
+                <View style={{ flex: 1 }} />
+                {destinations.length > 0 && (
+                    <Chip
+                        icon="delete-sweep"
+                        onPress={handleDeleteAll}
+                        style={[styles.chip, { backgroundColor: paperTheme.colors.errorContainer }]}
+                        textStyle={{ color: paperTheme.colors.error }}
+                    >
+                        Xóa tất cả
+                    </Chip>
+                )}
             </View>
 
             <Divider />
@@ -335,6 +331,8 @@ export default function DestinationsScreen() {
                 keyExtractor={(item) => item.id}
                 renderItem={renderItem}
                 contentContainerStyle={styles.list}
+                style={{ flex: 1 }}
+                removeClippedSubviews={false}
                 ListEmptyComponent={
                     <View style={styles.empty}>
                         <Text variant="bodyLarge" style={{ color: paperTheme.colors.onSurfaceVariant }}>
@@ -347,85 +345,7 @@ export default function DestinationsScreen() {
                 refreshing={loading}
                 onRefresh={loadData}
             />
-                </>
-            )}
 
-            {/* ==================== Explore Tab ==================== */}
-            {tabMode === "explore" && (
-                <>
-                    {/* Search */}
-                    <Searchbar
-                        placeholder="Tìm địa điểm..."
-                        value={poiSearch}
-                        onChangeText={setPoiSearch}
-                        style={styles.searchbar}
-                    />
-                    {/* Category filter */}
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ maxHeight: 44 }} contentContainerStyle={styles.chips}>
-                        {POI_CATEGORIES.map((cat) => (
-                            <Chip
-                                key={cat.key}
-                                selected={poiFilter === cat.key}
-                                onPress={() => setPoiFilter(cat.key)}
-                                style={styles.chip}
-                                compact
-                            >
-                                {cat.icon} {cat.label}
-                            </Chip>
-                        ))}
-                    </ScrollView>
-
-                    {/* Radius selector */}
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ maxHeight: 40 }} contentContainerStyle={[styles.chips, { paddingTop: 0 }]}>
-                        {[500, 1000, 1500, 3000, 5000].map((r) => (
-                            <Chip
-                                key={r}
-                                selected={poiRadius === r}
-                                onPress={() => { setPoiRadius(r); setPoisLoaded(false); }}
-                                style={styles.chip}
-                                compact
-                            >
-                                {r >= 1000 ? `${r / 1000} km` : `${r} m`}
-                            </Chip>
-                        ))}
-                    </ScrollView>
-
-                    {poisLoading ? (
-                        <View style={styles.empty}>
-                            <ActivityIndicator size="large" />
-                            <Text variant="bodyMedium" style={{ color: paperTheme.colors.onSurfaceVariant, marginTop: spacing.md }}>
-                                Đang tìm địa điểm xung quanh...
-                            </Text>
-                        </View>
-                    ) : (
-                        <FlatList
-                            data={filteredPOIs}
-                            keyExtractor={(item) => item.id}
-                            renderItem={renderPOIItem}
-                            contentContainerStyle={styles.list}
-                            ListHeaderComponent={
-                                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.sm }}>
-                                    <Text variant="bodySmall" style={{ color: paperTheme.colors.onSurfaceVariant }}>
-                                        {filteredPOIs.length} địa điểm trong {poiRadius >= 1000 ? `${poiRadius / 1000} km` : `${poiRadius} m`}
-                                    </Text>
-                                    {!poisLoaded && (
-                                        <Chip compact icon="reload" onPress={loadPOIs}>Tải lại</Chip>
-                                    )}
-                                </View>
-                            }
-                            ListEmptyComponent={
-                                <View style={styles.empty}>
-                                    <Text variant="bodyLarge" style={{ color: paperTheme.colors.onSurfaceVariant, textAlign: "center" }}>
-                                        {poisLoaded ? "Không tìm thấy địa điểm nào." : "Nhấn nút làm mới để tải."}
-                                    </Text>
-                                </View>
-                            }
-                            refreshing={poisLoading}
-                            onRefresh={loadPOIs}
-                        />
-                    )}
-                </>
-            )}
 
             {/* Fullscreen Photo Viewer */}
             <Modal
@@ -493,20 +413,12 @@ export default function DestinationsScreen() {
                 </View>
             </Modal>
         </View>
+        </AuthGuard>
     );
 }
 
 const styles = StyleSheet.create({
     container: { flex: 1 },
-    tabRow: {
-        flexDirection: "row",
-        paddingTop: spacing.md,
-    },
-    tabBtn: {
-        flex: 1,
-        alignItems: "center",
-        paddingVertical: spacing.sm,
-    },
     searchbar: { margin: spacing.sm, marginTop: spacing.sm },
     chips: {
         flexDirection: "row",
@@ -518,17 +430,73 @@ const styles = StyleSheet.create({
     list: { padding: spacing.sm },
     card: {
         marginBottom: spacing.sm,
-        borderRadius: 12,
+        borderRadius: 16,
         padding: spacing.sm,
     },
-    cardContent: {
+    cardRow: {
         flexDirection: "row",
         alignItems: "center",
+        gap: spacing.sm,
     },
-    cardLeft: { flex: 1 },
+    cardAvatar: {
+        width: 48,
+        height: 48,
+        borderRadius: 24,
+        justifyContent: "center",
+        alignItems: "center",
+    },
+    cardInfo: {
+        flex: 1,
+    },
+    cardThumb: {
+        width: 52,
+        height: 52,
+        borderRadius: 12,
+        overflow: "hidden",
+    },
+    cardThumbStack: {
+        width: 68,
+        height: 64,
+        position: "relative",
+    },
+    cardThumbBack: {
+        position: "absolute",
+        top: 0,
+        right: 0,
+        width: 46,
+        height: 46,
+        transform: [{ rotate: "8deg" }],
+        opacity: 0.7,
+    },
+    cardThumbFront: {
+        position: "absolute",
+        bottom: 0,
+        left: 0,
+        width: 48,
+        height: 48,
+        transform: [{ rotate: "-4deg" }],
+    },
+    cardThumbBadge: {
+        position: "absolute",
+        bottom: 2,
+        right: 2,
+        backgroundColor: "rgba(0,0,0,0.6)",
+        borderRadius: 8,
+        paddingHorizontal: 5,
+        paddingVertical: 1,
+    },
+    cardThumbBadgeText: {
+        color: "#fff",
+        fontSize: 10,
+        fontWeight: "bold",
+    },
     cardActions: {
         flexDirection: "row",
         alignItems: "center",
+        marginTop: 4,
+        paddingTop: 4,
+        borderTopWidth: StyleSheet.hairlineWidth,
+        borderTopColor: "#e0e0e0",
     },
     empty: {
         alignItems: "center",

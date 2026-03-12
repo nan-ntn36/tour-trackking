@@ -84,6 +84,16 @@ export async function deleteDestination(destId: string) {
     if (error) throw error;
 }
 
+// Xóa tất cả destinations của user
+export async function deleteAllDestinations(userId: string) {
+    const { error } = await supabase
+        .from("destinations")
+        .delete()
+        .eq("user_id", userId);
+
+    if (error) throw error;
+}
+
 // Tìm kiếm theo tên
 export async function searchDestinations(userId: string, query: string) {
     const { data, error } = await supabase

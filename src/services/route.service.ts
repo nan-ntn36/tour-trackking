@@ -1,5 +1,17 @@
 import { supabase } from "../lib/supabase";
 
+// Parse PostGIS LINESTRING WKT → coordinate array
+export function parseWKTLinestring(wkt: string): { latitude: number; longitude: number }[] {
+    if (!wkt) return [];
+    // SRID=4326;LINESTRING(lng1 lat1,lng2 lat2,...) or LINESTRING(...)
+    const match = wkt.match(/LINESTRING\((.+)\)/i);
+    if (!match) return [];
+    return match[1].split(",").map((pair) => {
+        const [lng, lat] = pair.trim().split(/\s+/).map(Number);
+        return { latitude: lat, longitude: lng };
+    });
+}
+
 // Lưu route mới
 export async function saveRoute(
     userId: string,
@@ -16,12 +28,18 @@ export async function saveRoute(
         .join(",");
     const wkt = `SRID=4326;LINESTRING(${linestring})`;
 
+    // Also save coordinates as JSON for easy retrieval
+    const coordsJson = JSON.stringify(
+        coordinates.map(c => [c.latitude, c.longitude])
+    );
+
     const { data, error } = await supabase
         .from("routes")
         .insert({
             user_id: userId,
             name: name || `Route ${new Date().toLocaleDateString("vi-VN")}`,
             path: wkt,
+            coordinates_json: coordsJson,
             distance_meters: distanceMeters,
             duration_seconds: durationSeconds,
             started_at: startedAt,
@@ -32,6 +50,21 @@ export async function saveRoute(
 
     if (error) throw error;
     return data;
+}
+
+// Parse coordinates from JSON or WKT fallback
+export function parseRouteCoordinates(route: any): { latitude: number; longitude: number }[] {
+    // Try JSON first
+    if (route.coordinates_json) {
+        try {
+            const arr = typeof route.coordinates_json === "string"
+                ? JSON.parse(route.coordinates_json)
+                : route.coordinates_json;
+            return arr.map((p: number[]) => ({ latitude: p[0], longitude: p[1] }));
+        } catch { }
+    }
+    // Fallback to WKT
+    return parseWKTLinestring(route.path || "");
 }
 
 // Lấy tất cả routes của user

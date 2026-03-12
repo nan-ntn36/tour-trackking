@@ -1,5 +1,8 @@
 import { supabase } from "../lib/supabase";
 
+// Flag để phân biệt logout thủ công vs session hết hạn
+export let _isManualSignOut = false;
+
 // Đăng ký
 export async function signUp(email: string, password: string, displayName: string) {
     const { data, error } = await supabase.auth.signUp({
@@ -25,7 +28,10 @@ export async function signIn(email: string, password: string) {
 
 // Đăng xuất
 export async function signOut() {
+    _isManualSignOut = true;
     const { error } = await supabase.auth.signOut();
+    // Reset flag sau khi event đã fire
+    setTimeout(() => { _isManualSignOut = false; }, 1000);
     if (error) throw error;
 }
 

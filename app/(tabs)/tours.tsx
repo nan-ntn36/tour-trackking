@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { View, StyleSheet, FlatList, Alert, Pressable, Share, Clipboard, ScrollView } from "react-native";
 import {
     Text, Surface, IconButton, FAB, Portal, Dialog, Button, TextInput,
@@ -16,12 +16,13 @@ import { getDestinations } from "../../src/services/destination.service";
 import { getMemberLocations } from "../../src/services/tour.service";
 import { haversineDistance, formatDistance } from "../../src/utils/distance";
 import { useFocusEffect, router } from "expo-router";
+import AuthGuard from "../../src/components/Auth/AuthGuard";
 
 type ViewMode = "list" | "detail";
 
 export default function ToursScreen() {
     const { paperTheme } = useAppTheme();
-    const { user } = useAuth();
+    const { user, loading: authLoading } = useAuth();
     const colors = paperTheme.colors;
 
     // Tours data
@@ -59,6 +60,17 @@ export default function ToursScreen() {
     // Menu for tour card
     const [menuTourId, setMenuTourId] = useState<string | null>(null);
 
+    // Clear data on logout
+    useEffect(() => {
+        if (!user) {
+            setTours([]);
+            setSelectedTour(null);
+            setTourMembers([]);
+            setTourDestinations([]);
+            setViewMode("list");
+        }
+    }, [user]);
+
     // ==================== Load Data ====================
     const loadTours = useCallback(async () => {
         if (!user) return;
@@ -78,6 +90,8 @@ export default function ToursScreen() {
             loadTours();
         }, [loadTours])
     );
+
+
 
     // ==================== Create Tour ====================
     const handleCreate = async () => {
@@ -494,175 +508,187 @@ export default function ToursScreen() {
         const isOwner = selectedTour.creator_id === user?.id;
 
         return (
+            <AuthGuard isAuthenticated={!!user} loading={authLoading}>
             <View style={[styles.container, { backgroundColor: colors.background }]}>
-                {/* Header */}
-                <Surface style={[styles.detailHeader, { backgroundColor: colors.surface }]} elevation={2}>
-                    <IconButton icon="arrow-left" onPress={() => { setViewMode("list"); setSelectedTour(null); }} />
-                    <View style={{ flex: 1 }}>
-                        <Text variant="titleLarge" style={{ fontWeight: "bold" }} numberOfLines={1}>
-                            {selectedTour.name}
-                        </Text>
-                        {selectedTour.description ? (
-                            <Text variant="bodySmall" style={{ color: colors.onSurfaceVariant }} numberOfLines={1}>
-                                {selectedTour.description}
+                {/* Modern Header */}
+                <Surface style={[styles.detailHeaderNew, { backgroundColor: colors.primary }]} elevation={4}>
+                    <View style={{ flexDirection: "row", alignItems: "center" }}>
+                        <IconButton icon="arrow-left" iconColor="#fff" onPress={() => { setViewMode("list"); setSelectedTour(null); }} />
+                        <View style={{ flex: 1 }}>
+                            <Text variant="titleLarge" style={{ fontWeight: "bold", color: "#fff" }} numberOfLines={1}>
+                                {selectedTour.name}
                             </Text>
-                        ) : null}
+                            {selectedTour.description ? (
+                                <Text variant="bodySmall" style={{ color: "rgba(255,255,255,0.8)" }} numberOfLines={1}>
+                                    {selectedTour.description}
+                                </Text>
+                            ) : null}
+                        </View>
+                        <Chip
+                            compact
+                            textStyle={{ fontSize: 11, color: "#fff", fontWeight: "bold" }}
+                            style={{ backgroundColor: statusColor(selectedTour.status), marginRight: spacing.xs }}
+                        >
+                            {statusLabel(selectedTour.status)}
+                        </Chip>
                     </View>
-                    <Chip
-                        compact
-                        textStyle={{ fontSize: 11, color: "#fff" }}
-                        style={{ backgroundColor: statusColor(selectedTour.status), marginRight: spacing.sm }}
-                    >
-                        {statusLabel(selectedTour.status)}
-                    </Chip>
                 </Surface>
 
-                <ScrollView style={{ flex: 1 }}>
-                {/* Invite code card */}
-                <Surface style={[styles.inviteCard, { backgroundColor: colors.primaryContainer }]} elevation={1}>
-                    <Text variant="labelMedium" style={{ color: colors.onPrimaryContainer }}>
-                        Mã mời
-                    </Text>
-                    <View style={styles.inviteRow}>
-                        <Text variant="headlineMedium" style={{ fontWeight: "bold", letterSpacing: 4, color: colors.onPrimaryContainer }}>
-                            {selectedTour.invite_code}
-                        </Text>
-                        <View style={{ flexDirection: "row" }}>
+                <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 100 }}>
+                    {/* Invite code card */}
+                    <Surface style={[styles.inviteCardNew, { backgroundColor: colors.primaryContainer }]} elevation={2}>
+                        <View style={{ flexDirection: "row", alignItems: "center" }}>
+                            <View style={{ flex: 1 }}>
+                                <Text variant="labelSmall" style={{ color: colors.onPrimaryContainer, opacity: 0.7 }}>
+                                    MÃ MỜI
+                                </Text>
+                                <Text variant="headlineSmall" style={{ fontWeight: "bold", letterSpacing: 4, color: colors.onPrimaryContainer }}>
+                                    {selectedTour.invite_code}
+                                </Text>
+                            </View>
                             <IconButton
                                 icon="content-copy"
+                                mode="contained"
+                                containerColor="rgba(255,255,255,0.3)"
                                 iconColor={colors.onPrimaryContainer}
-                                size={22}
+                                size={20}
                                 onPress={() => handleCopyCode(selectedTour.invite_code)}
                             />
                             <IconButton
                                 icon="share-variant"
+                                mode="contained"
+                                containerColor="rgba(255,255,255,0.3)"
                                 iconColor={colors.onPrimaryContainer}
-                                size={22}
+                                size={20}
                                 onPress={() => handleShareCode(selectedTour)}
                             />
                         </View>
+                    </Surface>
+
+                    {/* View on Map button */}
+                    <Pressable
+                        onPress={() => {
+                            router.navigate({
+                                pathname: "/(tabs)/map",
+                                params: {
+                                    tourId: selectedTour.id,
+                                    tourName: selectedTour.name,
+                                    _ts: Date.now().toString(),
+                                },
+                            });
+                        }}
+                        style={[styles.mapBtnNew, { backgroundColor: colors.secondaryContainer }]}
+                    >
+                        <Text style={{ fontSize: 20 }}>🗺️</Text>
+                        <Text variant="bodyMedium" style={{ flex: 1, fontWeight: "600", color: colors.onSecondaryContainer, marginLeft: spacing.sm }}>
+                            Xem vị trí thành viên trên bản đồ
+                        </Text>
+                        <IconButton icon="chevron-right" iconColor={colors.onSecondaryContainer} size={20} style={{ margin: 0 }} />
+                    </Pressable>
+
+                    {/* Destinations section */}
+                    <View style={styles.sectionHeader}>
+                        <Text variant="titleMedium" style={{ fontWeight: "bold" }}>
+                            📍 Điểm đến ({tourDestinations.length})
+                        </Text>
+                        <IconButton icon="plus-circle" size={22} iconColor={colors.primary} onPress={openAddDestDialog} style={{ margin: 0 }} />
                     </View>
-                </Surface>
 
-                {/* View on Map button */}
-                <Button
-                    mode="contained-tonal"
-                    icon="map-marker-multiple"
-                    onPress={() => {
-                        router.navigate({
-                            pathname: "/(tabs)/map",
-                            params: {
-                                tourId: selectedTour.id,
-                                tourName: selectedTour.name,
-                                _ts: Date.now().toString(),
-                            },
-                        });
-                    }}
-                    style={{ marginHorizontal: spacing.sm, marginBottom: spacing.xs }}
-                >
-                    🗺️ Xem vị trí thành viên trên bản đồ
-                </Button>
-
-                {/* Destinations header */}
-                <View style={styles.membersHeader}>
-                    <Text variant="titleMedium" style={{ fontWeight: "bold" }}>
-                        📍 Điểm đến ({tourDestinations.length})
-                    </Text>
-                    <IconButton icon="plus" size={20} onPress={openAddDestDialog} />
-                </View>
-
-                {/* Destinations list */}
-                {destsLoading ? (
-                    <ActivityIndicator style={{ marginTop: spacing.sm }} />
-                ) : tourDestinations.length > 0 ? (
-                    tourDestinations.map((td) => {
-                        const dest = td.destinations;
-                        return (
-                            <Pressable key={td.id} onPress={() => handleGoToDestMap(dest)} style={{ paddingHorizontal: spacing.sm }}>
-                                <Surface style={[styles.memberCard, { backgroundColor: colors.surface }]} elevation={1}>
-                                    <View style={styles.memberRow}>
-                                        <View style={[styles.destDot, { backgroundColor: dest?.is_favorite ? '#FFD700' : colors.primary }]} />
-                                        <View style={{ flex: 1, marginLeft: spacing.sm }}>
-                                            <Text variant="bodyLarge" style={{ fontWeight: "bold" }}>
-                                                {dest?.is_favorite ? '⭐ ' : ''}{dest?.name || 'Điểm đến'}
-                                            </Text>
-                                            {dest?.description ? (
-                                                <Text variant="bodySmall" style={{ color: colors.onSurfaceVariant }} numberOfLines={1}>
-                                                    {dest.description}
+                    {destsLoading ? (
+                        <ActivityIndicator style={{ marginTop: spacing.sm }} />
+                    ) : tourDestinations.length > 0 ? (
+                        tourDestinations.map((td) => {
+                            // Handle different Supabase join formats
+                            const raw = td.destinations;
+                            const dest = Array.isArray(raw) ? raw[0] : (raw && typeof raw === 'object' ? raw : null);
+                            const destName = dest?.name || td.destination_id || 'Điểm đến';
+                            return (
+                                <Pressable key={td.id} onPress={() => dest && handleGoToDestMap(dest)} style={{ paddingHorizontal: spacing.sm, marginBottom: spacing.xs }}>
+                                    <Surface style={[styles.destCard, { backgroundColor: colors.surface }]} elevation={1}>
+                                        <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+                                            <View style={[styles.destIcon, { backgroundColor: dest?.is_favorite ? '#FFF3E0' : colors.primaryContainer }]}>
+                                                <Text style={{ fontSize: 18 }}>{dest?.is_favorite ? '⭐' : '📍'}</Text>
+                                            </View>
+                                            <View style={{ flex: 1 }}>
+                                                <Text variant="titleSmall" style={{ fontWeight: "bold" }}>
+                                                    {destName}
                                                 </Text>
-                                            ) : null}
-                                            {/* Member distances */}
-                                            {dest?.latitude && dest?.longitude && tourMembers.length > 0 && (
-                                                <View style={{ marginTop: spacing.xs, gap: 2 }}>
-                                                    {tourMembers
-                                                        .filter((m: any) => m.last_latitude && m.last_longitude)
-                                                        .map((m: any) => ({
-                                                            ...m,
-                                                            dist: haversineDistance(
-                                                                m.last_latitude, m.last_longitude,
-                                                                dest.latitude, dest.longitude
-                                                            ),
-                                                        }))
-                                                        .sort((a: any, b: any) => a.dist - b.dist)
-                                                        .map((m: any) => {
-                                                            const profile = m.profiles;
-                                                            const name = profile?.display_name || '?';
-                                                            const isSelf = m.user_id === user?.id;
-                                                            const isOwner = m.role === 'owner';
-                                                            const dotColor = isSelf ? '#4CAF50' : isOwner ? '#FF9800' : '#2196F3';
-                                                            return (
-                                                                <View key={m.user_id} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                                                                    <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: dotColor }} />
-                                                                    <Text variant="labelSmall" style={{ color: colors.onSurfaceVariant }}>
-                                                                        {isSelf ? 'Bạn' : name}: {formatDistance(m.dist)}
-                                                                    </Text>
-                                                                </View>
-                                                            );
-                                                        })}
-                                                </View>
-                                            )}
+                                                {dest?.description ? (
+                                                    <Text variant="bodySmall" style={{ color: colors.onSurfaceVariant }} numberOfLines={1}>
+                                                        {dest.description}
+                                                    </Text>
+                                                ) : null}
+                                            </View>
+                                            <IconButton
+                                                icon="close-circle-outline"
+                                                iconColor={colors.error}
+                                                size={18}
+                                                onPress={() => handleRemoveDest(td)}
+                                                style={{ margin: 0 }}
+                                            />
                                         </View>
-                                        <IconButton
-                                            icon="close"
-                                            iconColor={colors.error}
-                                            size={18}
-                                            onPress={() => handleRemoveDest(td)}
-                                        />
-                                    </View>
-                                </Surface>
-                            </Pressable>
-                        );
-                    })
-                ) : (
-                    <Text variant="bodySmall" style={{ color: colors.onSurfaceVariant, textAlign: 'center', padding: spacing.md }}>
-                        Chưa có điểm đến. Nhấn + để thêm.
-                    </Text>
-                )}
+                                        {/* Member distances */}
+                                        {dest?.latitude && dest?.longitude && tourMembers.length > 0 && (
+                                            <View style={styles.distanceRow}>
+                                                {tourMembers
+                                                    .filter((m: any) => m.last_latitude && m.last_longitude)
+                                                    .map((m: any) => ({
+                                                        ...m,
+                                                        dist: haversineDistance(
+                                                            m.last_latitude, m.last_longitude,
+                                                            dest.latitude, dest.longitude
+                                                        ),
+                                                    }))
+                                                    .sort((a: any, b: any) => a.dist - b.dist)
+                                                    .slice(0, 4)
+                                                    .map((m: any) => {
+                                                        const profile = m.profiles;
+                                                        const name = profile?.display_name || '?';
+                                                        const isSelf = m.user_id === user?.id;
+                                                        return (
+                                                            <Chip
+                                                                key={m.user_id}
+                                                                compact
+                                                                textStyle={{ fontSize: 11 }}
+                                                                style={{ backgroundColor: isSelf ? '#E8F5E9' : colors.surfaceVariant, height: 28 }}
+                                                            >
+                                                                {isSelf ? 'Bạn' : name}: {formatDistance(m.dist)}
+                                                            </Chip>
+                                                        );
+                                                    })}
+                                            </View>
+                                        )}
+                                    </Surface>
+                                </Pressable>
+                            );
+                        })
+                    ) : (
+                        <Text variant="bodySmall" style={{ color: colors.onSurfaceVariant, textAlign: 'center', padding: spacing.md }}>
+                            Chưa có điểm đến. Nhấn + để thêm.
+                        </Text>
+                    )}
 
-                <Divider style={{ marginVertical: spacing.sm }} />
+                    {/* Members section */}
+                    <View style={[styles.sectionHeader, { marginTop: spacing.sm }]}>
+                        <Text variant="titleMedium" style={{ fontWeight: "bold" }}>
+                            👥 Thành viên ({tourMembers.length})
+                        </Text>
+                        <IconButton icon="refresh" size={20} iconColor={colors.primary} onPress={() => loadMembers(selectedTour.id)} style={{ margin: 0 }} />
+                    </View>
 
-                {/* Members header */}
-                <View style={styles.membersHeader}>
-                    <Text variant="titleMedium" style={{ fontWeight: "bold" }}>
-                        👥 Thành viên ({tourMembers.length})
-                    </Text>
-                    <IconButton icon="refresh" size={20} onPress={() => loadMembers(selectedTour.id)} />
-                </View>
-
-                {/* Members list */}
-                {membersLoading ? (
-                    <ActivityIndicator style={{ marginTop: spacing.sm }} />
-                ) : tourMembers.length > 0 ? (
-                    tourMembers.map((item) => (
-                        <View key={item.id} style={{ paddingHorizontal: spacing.sm }}>
-                            {renderMemberCard({ item })}
-                        </View>
-                    ))
-                ) : (
-                    <Text variant="bodySmall" style={{ color: colors.onSurfaceVariant, textAlign: 'center', padding: spacing.md }}>
-                        Chưa có thành viên
-                    </Text>
-                )}
+                    {membersLoading ? (
+                        <ActivityIndicator style={{ marginTop: spacing.sm }} />
+                    ) : tourMembers.length > 0 ? (
+                        tourMembers.map((item) => (
+                            <View key={item.id} style={{ paddingHorizontal: spacing.sm }}>
+                                {renderMemberCard({ item })}
+                            </View>
+                        ))
+                    ) : (
+                        <Text variant="bodySmall" style={{ color: colors.onSurfaceVariant, textAlign: 'center', padding: spacing.md }}>
+                            Chưa có thành viên
+                        </Text>
+                    )}
                 </ScrollView>
 
                 {/* Bottom actions */}
@@ -743,11 +769,13 @@ export default function ToursScreen() {
                     {snackMsg}
                 </Snackbar>
             </View>
+            </AuthGuard>
         );
     }
 
     // ==================== List View ====================
     return (
+        <AuthGuard isAuthenticated={!!user} loading={authLoading}>
         <View style={[styles.container, { backgroundColor: colors.background }]}>
             <FlatList
                 data={tours}
@@ -803,7 +831,7 @@ export default function ToursScreen() {
 
             {/* Create Tour Dialog */}
             <Portal>
-                <Dialog visible={showCreate} onDismiss={() => setShowCreate(false)}>
+                <Dialog visible={showCreate} onDismiss={() => setShowCreate(false)} style={{ marginBottom: 120 }}>
                     <Dialog.Title>🎯 Tạo Tour mới</Dialog.Title>
                     <Dialog.Content>
                         <TextInput
@@ -874,6 +902,7 @@ export default function ToursScreen() {
                 {snackMsg}
             </Snackbar>
         </View>
+        </AuthGuard>
     );
 }
 
@@ -915,16 +944,65 @@ const styles = StyleSheet.create({
         paddingBottom: spacing.sm,
         paddingRight: spacing.sm,
     },
+    detailHeaderNew: {
+        paddingTop: 12,
+        paddingBottom: spacing.sm,
+        borderBottomLeftRadius: 20,
+        borderBottomRightRadius: 20,
+    },
     inviteCard: {
         margin: spacing.sm,
         padding: spacing.md,
         borderRadius: borderRadius.md,
+    },
+    inviteCardNew: {
+        margin: spacing.sm,
+        padding: spacing.md,
+        borderRadius: 16,
     },
     inviteRow: {
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "space-between",
         marginTop: spacing.xs,
+    },
+    mapBtnNew: {
+        flexDirection: "row",
+        alignItems: "center",
+        marginHorizontal: spacing.sm,
+        marginBottom: spacing.xs,
+        padding: spacing.sm,
+        borderRadius: 14,
+    },
+    sectionHeader: {
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+        paddingHorizontal: spacing.md,
+        paddingTop: spacing.sm,
+        paddingBottom: spacing.xs,
+    },
+    destCard: {
+        borderRadius: 14,
+        padding: spacing.md,
+        paddingBottom: spacing.sm,
+        overflow: "visible",
+    },
+    destIcon: {
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        justifyContent: "center",
+        alignItems: "center",
+    },
+    distanceRow: {
+        flexDirection: "row",
+        flexWrap: "wrap",
+        gap: 6,
+        marginTop: spacing.sm,
+        paddingTop: spacing.xs,
+        borderTopWidth: StyleSheet.hairlineWidth,
+        borderTopColor: "#e0e0e0",
     },
     membersHeader: {
         flexDirection: "row",

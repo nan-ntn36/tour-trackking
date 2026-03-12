@@ -44,6 +44,15 @@ export default function TabLayout() {
                 }}
             />
             <Tabs.Screen
+                name="routes"
+                options={{
+                    title: "Tuyến đường",
+                    tabBarIcon: ({ color, size }) => (
+                        <MaterialCommunityIcons name="map-marker-path" size={size} color={color} />
+                    ),
+                }}
+            />
+            <Tabs.Screen
                 name="tours"
                 options={{
                     title: "Tours",

@@ -1,5 +1,5 @@
-import { useState, useCallback } from "react";
-import { View, StyleSheet, ScrollView, Alert, Pressable } from "react-native";
+import { useState, useCallback, useEffect } from "react";
+import { View, StyleSheet, ScrollView, Alert, Pressable, ActionSheetIOS, Platform } from "react-native";
 import {
     Text, Surface, Button, Switch, Divider, Avatar, IconButton,
     Portal, Dialog, TextInput, ActivityIndicator, Chip,
@@ -8,12 +8,15 @@ import { useAppTheme } from "../../src/theme/ThemeProvider";
 import { spacing } from "../../src/theme/spacing";
 import { useAuth } from "../../src/hooks/useAuth";
 import { signOut, updateProfile } from "../../src/services/auth.service";
+import { uploadPhoto } from "../../src/services/photo.service";
 import { supabase } from "../../src/lib/supabase";
 import { router, useFocusEffect } from "expo-router";
+import AuthGuard from "../../src/components/Auth/AuthGuard";
+import * as ImagePicker from "expo-image-picker";
 
 export default function ProfileScreen() {
     const { paperTheme, isDark, toggleTheme } = useAppTheme();
-    const { user, profile, isAuthenticated, refreshProfile } = useAuth();
+    const { user, profile, isAuthenticated, refreshProfile, loading: authLoading } = useAuth();
     const colors = paperTheme.colors;
 
     const [loggingOut, setLoggingOut] = useState(false);
@@ -28,6 +31,17 @@ export default function ProfileScreen() {
     const [recentTours, setRecentTours] = useState<any[]>([]);
     const [statsLoading, setStatsLoading] = useState(true);
 
+    // Avatar upload
+    const [avatarUploading, setAvatarUploading] = useState(false);
+
+    // Clear data on logout
+    useEffect(() => {
+        if (!user) {
+            setStats({ totalKm: 0, totalRoutes: 0, totalCheckins: 0, totalTours: 0, totalPhotos: 0 });
+            setRecentTours([]);
+        }
+    }, [user]);
+
     // Load stats on focus
     useFocusEffect(
         useCallback(() => {
@@ -35,6 +49,8 @@ export default function ProfileScreen() {
             loadStats();
         }, [user])
     );
+
+
 
     const loadStats = async () => {
         if (!user) return;
@@ -107,6 +123,95 @@ export default function ProfileScreen() {
         }
     };
 
+    // ==================== Avatar Upload ====================
+    const pickAndUploadAvatar = async (source: "camera" | "gallery") => {
+        try {
+            let result: ImagePicker.ImagePickerResult;
+
+            if (source === "camera") {
+                const perm = await ImagePicker.requestCameraPermissionsAsync();
+                if (!perm.granted) {
+                    Alert.alert("Quyền truy cập", "Cần quyền camera để chụp ảnh");
+                    return;
+                }
+                result = await ImagePicker.launchCameraAsync({
+                    allowsEditing: true,
+                    aspect: [1, 1],
+                    quality: 0.7,
+                });
+            } else {
+                const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+                if (!perm.granted) {
+                    Alert.alert("Quyền truy cập", "Cần quyền truy cập thư viện ảnh");
+                    return;
+                }
+                result = await ImagePicker.launchImageLibraryAsync({
+                    mediaTypes: ["images"],
+                    allowsEditing: true,
+                    aspect: [1, 1],
+                    quality: 0.7,
+                });
+            }
+
+            if (result.canceled || !result.assets?.[0]) return;
+
+            setAvatarUploading(true);
+            const { url } = await uploadPhoto(result.assets[0].uri);
+            await updateProfile(user!.id, { avatar_url: url });
+            refreshProfile?.();
+            Alert.alert("Thành công", "Ảnh đại diện đã được cập nhật!");
+        } catch (err: any) {
+            console.error("Avatar upload error:", err);
+            Alert.alert("Lỗi", err.message || "Không thể upload ảnh");
+        } finally {
+            setAvatarUploading(false);
+        }
+    };
+
+    const handleRemoveAvatar = async () => {
+        if (!user) return;
+        try {
+            setAvatarUploading(true);
+            await updateProfile(user.id, { avatar_url: null as any });
+            refreshProfile?.();
+            Alert.alert("Thành công", "Đã xóa ảnh đại diện");
+        } catch (err: any) {
+            Alert.alert("Lỗi", err.message || "Không thể xóa ảnh đại diện");
+        } finally {
+            setAvatarUploading(false);
+        }
+    };
+
+    const handleAvatarPress = () => {
+        if (!isAuthenticated) return;
+
+        const options = ["📷 Chụp ảnh mới", "🖼️ Chọn từ thư viện"];
+        if (profile?.avatar_url) options.push("🗑️ Xóa ảnh đại diện");
+        options.push("Hủy");
+
+        if (Platform.OS === "ios") {
+            ActionSheetIOS.showActionSheetWithOptions(
+                { options, cancelButtonIndex: options.length - 1, destructiveButtonIndex: profile?.avatar_url ? options.length - 2 : undefined },
+                (idx) => {
+                    if (idx === 0) pickAndUploadAvatar("camera");
+                    else if (idx === 1) pickAndUploadAvatar("gallery");
+                    else if (idx === 2 && profile?.avatar_url) handleRemoveAvatar();
+                }
+            );
+        } else {
+            // Android: use Alert with buttons
+            const buttons: any[] = [
+                { text: "📷 Chụp ảnh", onPress: () => pickAndUploadAvatar("camera") },
+                { text: "🖼️ Thư viện", onPress: () => pickAndUploadAvatar("gallery") },
+            ];
+            if (profile?.avatar_url) {
+                buttons.push({ text: "🗑️ Xóa avatar", style: "destructive", onPress: handleRemoveAvatar });
+            }
+            buttons.push({ text: "Hủy", style: "cancel" });
+            Alert.alert("Ảnh đại diện", "Chọn nguồn ảnh", buttons);
+        }
+    };
+
     const statusColor = (status: string) => {
         switch (status) {
             case "active": return "#4CAF50";
@@ -126,6 +231,7 @@ export default function ProfileScreen() {
     };
 
     return (
+        <AuthGuard isAuthenticated={!!user} loading={authLoading}>
         <ScrollView
             style={[styles.container, { backgroundColor: colors.background }]}
             contentContainerStyle={styles.content}
@@ -133,12 +239,39 @@ export default function ProfileScreen() {
             {/* ==================== Avatar Card ==================== */}
             <Surface style={[styles.profileCard, { backgroundColor: colors.primaryContainer }]} elevation={2}>
                 <View style={styles.avatarRow}>
-                    <Avatar.Text
-                        size={72}
-                        label={profile?.display_name?.substring(0, 2).toUpperCase() || "?"}
-                        style={{ backgroundColor: colors.primary }}
-                        labelStyle={{ color: colors.onPrimary, fontSize: 28 }}
-                    />
+                    <Pressable onPress={handleAvatarPress} style={styles.avatarContainer}>
+                        {profile?.avatar_url ? (
+                            <Avatar.Image
+                                size={72}
+                                source={{ uri: profile.avatar_url }}
+                                style={{ backgroundColor: colors.primary }}
+                            />
+                        ) : (
+                            <Avatar.Text
+                                size={72}
+                                label={profile?.display_name?.substring(0, 2).toUpperCase() || "?"}
+                                style={{ backgroundColor: colors.primary }}
+                                labelStyle={{ color: colors.onPrimary, fontSize: 28 }}
+                            />
+                        )}
+                        {/* Camera overlay icon */}
+                        {isAuthenticated && !avatarUploading && (
+                            <View style={[styles.cameraOverlay, { backgroundColor: colors.primary }]}>
+                                <IconButton
+                                    icon="camera"
+                                    size={14}
+                                    iconColor={colors.onPrimary}
+                                    style={{ margin: 0 }}
+                                />
+                            </View>
+                        )}
+                        {/* Loading overlay */}
+                        {avatarUploading && (
+                            <View style={styles.uploadingOverlay}>
+                                <ActivityIndicator size="small" color={colors.onPrimary} />
+                            </View>
+                        )}
+                    </Pressable>
                     <View style={{ flex: 1, marginLeft: spacing.md }}>
                         {isAuthenticated ? (
                             <>
@@ -291,6 +424,7 @@ export default function ProfileScreen() {
                 </Dialog>
             </Portal>
         </ScrollView>
+        </AuthGuard>
     );
 }
 
@@ -304,6 +438,27 @@ const styles = StyleSheet.create({
     },
     avatarRow: {
         flexDirection: "row",
+        alignItems: "center",
+    },
+    avatarContainer: {
+        position: "relative",
+    },
+    cameraOverlay: {
+        position: "absolute",
+        bottom: -2,
+        right: -2,
+        borderRadius: 12,
+        width: 28,
+        height: 28,
+        justifyContent: "center",
+        alignItems: "center",
+        elevation: 2,
+    },
+    uploadingOverlay: {
+        ...StyleSheet.absoluteFillObject,
+        backgroundColor: "rgba(0,0,0,0.4)",
+        borderRadius: 36,
+        justifyContent: "center",
         alignItems: "center",
     },
     sectionTitle: {
