@@ -16,6 +16,26 @@ export async function signUp(email: string, password: string, displayName: strin
     return data;
 }
 
+// Xác thực OTP từ email
+export async function verifyOtp(email: string, token: string) {
+    const { data, error } = await supabase.auth.verifyOtp({
+        email,
+        token,
+        type: "signup",
+    });
+    if (error) throw error;
+    return data;
+}
+
+// Gửi lại mã xác thực
+export async function resendOtp(email: string) {
+    const { error } = await supabase.auth.resend({
+        type: "signup",
+        email,
+    });
+    if (error) throw error;
+}
+
 // Đăng nhập
 export async function signIn(email: string, password: string) {
     const { data, error } = await supabase.auth.signInWithPassword({

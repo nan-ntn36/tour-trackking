@@ -39,7 +39,11 @@ export default function RegisterScreen() {
         setLoading(true);
         try {
             await signUp(email.trim(), password, displayName.trim());
-            router.replace("/(tabs)/map");
+            // Chuyển sang màn xác thực OTP
+            router.replace({
+                pathname: "/(auth)/verify-otp",
+                params: { email: email.trim() },
+            });
         } catch (err: any) {
             setError(err.message || "Đăng ký thất bại");
         } finally {
