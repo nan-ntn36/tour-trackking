@@ -8,6 +8,16 @@
 
 ---
 
+## 📥 Tải ứng dụng
+
+| Platform | Download |
+|----------|----------|
+| Android  | [⬇️ Tải APK (phiên bản mới nhất)](https://github.com/nan-ntn36/tour-trackking/releases/latest) |
+
+> 💡 Vào trang **Releases**, kéo xuống phần **Assets** và nhấn vào file `.apk` để tải về. Sau đó cài đặt trực tiếp trên điện thoại Android.
+
+---
+
 ## 📱 Tính năng chính
 
 ### 🗺️ Bản đồ (Map)
